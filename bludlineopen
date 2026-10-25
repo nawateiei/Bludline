@@ -1,0 +1,1539 @@
+-- ============================================================
+--  "Bloodline" — Master Two-Loop Combat-Engine ESP for Matcha
+--  Built for Roblox Place ID: 10266164381 (Bloodlines)
+-- ============================================================
+
+-- Clean up any previous Bloodline instance
+if _G.Bloodline_cleanup then
+    pcall(_G.Bloodline_cleanup)
+    _G.Bloodline_cleanup = nil
+end
+
+pcall(function() UI.RemoveTab("Bloodline") end)
+pcall(function() UI.RemoveTab("Event Notifier") end)
+
+local RunService = game:GetService("RunService")
+local Players    = game:GetService("Players")
+local Workspace  = game:GetService("Workspace")
+
+-- Persistent Debug Logger
+local function logDebug(msg)
+    pcall(function()
+        local line = string.format("[%s] %s\n", os.date("%X"), tostring(msg))
+        appendfile("bloodline_debug.txt", line)
+    end)
+end
+
+pcall(function()
+    writefile("bloodline_debug.txt", string.format("=== Bloodline Two-Loop Engine Started at %s ===\n", os.date("%Y-%m-%d %X")))
+end)
+
+-- IEEE-754 Validation Helpers
+local function isValidNum(n)
+    return type(n) == "number" and n == n and n > -1e9 and n < 1e9
+end
+
+local function isValidVec2(v)
+    return v and isValidNum(v.X) and isValidNum(v.Y)
+end
+
+local function isValidVec3(v)
+    return v and isValidNum(v.X) and isValidNum(v.Y) and isValidNum(v.Z)
+end
+
+-- Color Constants
+local COL_GREEN   = Color3.fromRGB(0, 255, 100)
+local COL_YELLOW  = Color3.fromRGB(255, 200, 0)
+local COL_RED     = Color3.fromRGB(255, 60, 60)
+local COL_PURPLE  = Color3.fromRGB(175, 45, 255)
+local COL_PURP_TXT= Color3.fromRGB(220, 140, 255)
+local COL_BAR_BG  = Color3.fromRGB(20, 20, 20)
+
+-- Rare Items Database
+local RARE_ITEMS = {
+    ["Life Up Fruit"] = {
+        color  = Color3.fromRGB(50, 255, 120),
+        label  = "★ Life Up Fruit ★",
+        filter = "Life Up Fruit"
+    },
+    ["Fruit Of Forgetfulness"] = {
+        color  = Color3.fromRGB(255, 75, 150),
+        label  = "★ Fruit of Forgetfulness ★",
+        filter = "Fruit of Forgetfulness"
+    },
+    ["Fruit of Forgetfulness"] = {
+        color  = Color3.fromRGB(255, 75, 150),
+        label  = "★ Fruit of Forgetfulness ★",
+        filter = "Fruit of Forgetfulness"
+    },
+    ["Chakra Fruit"] = {
+        color  = Color3.fromRGB(180, 70, 255),
+        label  = "★ Chakra Fruit ★",
+        filter = "Chakra Fruit"
+    },
+    ["Mastery Scroll"] = {
+        color  = Color3.fromRGB(0, 230, 255),
+        label  = "★ Mastery Scroll ★",
+        filter = "Scrolls"
+    },
+    ["Summoning Scroll"] = {
+        color  = Color3.fromRGB(0, 230, 255),
+        label  = "★ Summoning Scroll ★",
+        filter = "Scrolls"
+    },
+    ["Trait Scroll"] = {
+        color  = Color3.fromRGB(255, 160, 40),
+        label  = "★ Trait Scroll ★",
+        filter = "Scrolls"
+    },
+
+    -- ================= RARE RINGS (Combined Toggle) =================
+    ["Ring of Favor"]           = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Favor ★", filter = "Rings" },
+    ["Ring of Vitality"]        = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Vitality ★", filter = "Rings" },
+    ["Ring of Nourishment"]     = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Nourishment ★", filter = "Rings" },
+    ["Ring of Infusion"]        = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Infusion ★", filter = "Rings" },
+    ["Ring of Remedy"]          = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Remedy ★", filter = "Rings" },
+    ["Bloodbite Ring"]          = { color = Color3.fromRGB(255, 185, 30), label = "★ Bloodbite Ring ★", filter = "Rings" },
+    ["Ring of Resistance"]      = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Resistance ★", filter = "Rings" },
+    ["Ring of Dexterity"]       = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Dexterity ★", filter = "Rings" },
+    ["Ring of Neoncat"]         = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Neoncat ★", filter = "Rings" },
+    ["Ring of a Helping Hand"]  = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of a Helping Hand ★", filter = "Rings" },
+
+    -- ================= SCHEMATICS (Combined Toggle) =================
+    ["Kusanagi Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "★ Kusanagi Schematics ★", filter = "Schematics" },
+    ["Raijin Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "★ Raijin Schematics ★", filter = "Schematics" },
+    ["Staff Schematics"]        = { color = Color3.fromRGB(100, 190, 255), label = "★ Staff Schematics ★", filter = "Schematics" },
+    ["Executioner Schematics"]  = { color = Color3.fromRGB(100, 190, 255), label = "★ Executioner Schematics ★", filter = "Schematics" },
+    ["Samehada Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "★ Samehada Schematics ★", filter = "Schematics" },
+    ["Gunbai Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "★ Gunbai Schematics ★", filter = "Schematics" },
+    ["Ring Schematic"]          = { color = Color3.fromRGB(100, 190, 255), label = "★ Ring Schematic ★", filter = "Schematics" },
+
+    -- ================= RARE EYES (Combined Toggle) =================
+    ["Sharingan Eyes"]          = { color = Color3.fromRGB(255, 45, 75), label = "★ Sharingan Eyes ★", filter = "Eyes" },
+    ["Byakugan Eyes"]           = { color = Color3.fromRGB(230, 230, 255), label = "★ Byakugan Eyes ★", filter = "Eyes" },
+    ["Mangekyo Eyes"]           = { color = Color3.fromRGB(255, 30, 100), label = "★ Mangekyo Eyes ★", filter = "Eyes" },
+    ["Ketsuryugan Eyes"]        = { color = Color3.fromRGB(255, 20, 50), label = "★ Ketsuryugan Eyes ★", filter = "Eyes" },
+    ["Rinnegan Eyes"]           = { color = Color3.fromRGB(195, 130, 255), label = "★ Rinnegan Eyes ★", filter = "Eyes" },
+}
+
+local KNOWN_ITEMS = {
+    ["Apple"]                  = true,
+    ["Alluring Apple"]         = true,
+    ["Banana"]                 = true,
+    ["Orange"]                 = true,
+    ["Pear"]                   = true,
+    ["Mango"]                  = true,
+    ["Life Up Fruit"]          = true,
+    ["Fruit of Forgetfulness"] = true,
+    ["Fruit Of Forgetfulness"] = true,
+    ["Chakra Fruit"]           = true,
+    ["Mastery Scroll"]         = true,
+    ["Summoning Scroll"]       = true,
+    ["Trait Scroll"]           = true,
+    ["Sealing Bells"]          = true,
+    ["Training Bells"]         = true,
+    ["Seaweed"]                = true,
+    ["Gloweed"]                = true,
+    ["Glowweed"]               = true,
+    ["Ring of Favor"]          = true,
+    ["Ring of Vitality"]       = true,
+    ["Ring of Nourishment"]    = true,
+    ["Ring of Infusion"]       = true,
+    ["Ring of Remedy"]         = true,
+    ["Bloodbite Ring"]         = true,
+    ["Ring of Resistance"]     = true,
+    ["Ring of Dexterity"]      = true,
+    ["Ring of Neoncat"]        = true,
+    ["Ring of a Helping Hand"] = true,
+    ["Kusanagi Schematics"]    = true,
+    ["Raijin Schematics"]      = true,
+    ["Staff Schematics"]       = true,
+    ["Executioner Schematics"] = true,
+    ["Samehada Schematics"]    = true,
+    ["Gunbai Schematics"]      = true,
+    ["Ring Schematic"]         = true,
+    ["Sharingan Eyes"]         = true,
+    ["Byakugan Eyes"]          = true,
+    ["Mangekyo Eyes"]          = true,
+    ["Ketsuryugan Eyes"]       = true,
+    ["Rinnegan Eyes"]          = true,
+}
+
+-- Common rings and static jewelry that must NEVER be categorized as items or rare rings
+local COMMON_RINGS = {
+    ["Ring"]               = true,
+    ["Gold Ring"]          = true,
+    ["Golden Ring"]        = true,
+    ["Gold Enclosed Ring"] = true,
+    ["Common Ring"]        = true,
+    ["Necklace"]           = true,
+}
+
+local STATIC_PROP_NAMES = {
+    ["Model"]                 = true,
+    ["BushModel"]             = true,
+    ["Grass"]                 = true,
+    ["Part"]                  = true,
+    ["Torch"]                 = true,
+    ["NightTorch"]            = true,
+    ["MiniPath"]              = true,
+    ["TreeTrunk"]             = true,
+    ["Table"]                 = true,
+    ["Branch"]                = true,
+    ["BambooProp"]            = true,
+    ["Fence"]                 = true,
+    ["ParkourFloor"]          = true,
+    ["SoryLantern"]           = true,
+    ["WoodPart"]              = true,
+    ["Portal2"]               = true,
+    ["Electricity Pole"]      = true,
+    ["Portal"]                = true,
+    ["PillarPoint"]           = true,
+    ["Chair"]                 = true,
+    ["Window"]                = true,
+    ["Soil"]                  = true,
+    ["Tube"]                  = true,
+    ["Rock"]                  = true,
+    ["Wall"]                  = true,
+    ["Floor"]                 = true,
+    ["Building"]              = true,
+    ["Debris"]                = true,
+    ["Locations"]             = true,
+    ["Ramen Shop"]            = true,
+    ["SpawnLocation"]         = true,
+    ["ClothingModel"]         = true,
+    ["RainParts"]             = true,
+    ["TrashCan"]              = true,
+    ["PalmTree"]              = true,
+    ["Bed"]                   = true,
+    ["ChakraKnightRewards"]   = true,
+    ["SealingFloor"]          = true,
+    ["SealingDoor"]           = true,
+    ["sealingBellsSpawn"]     = true,
+    ["trainingBellsSpawn"]    = true,
+    ["BellsActivationFloor1"] = true,
+    ["ShockRing"]             = true,
+    ["Shock Ring"]            = true,
+    ["ThinRing"]              = true,
+    ["Thin Ring"]             = true,
+    ["MovingRing"]            = true,
+    ["Moving Ring"]           = true,
+    ["Ring"]                  = true,
+    ["Gold Ring"]             = true,
+    ["Golden Ring"]           = true,
+    ["Gold Enclosed Ring"]    = true,
+    ["Necklace"]              = true,
+}
+
+-- Known Friendly Town NPCs (Excluded from Combat Mobs ESP)
+local FRIENDLY_NPCS = {
+    ["The Earthly Explorer"]                     = true,
+    ["The Banker"]                               = true,
+    ["Chef"]                                     = true,
+    ["Lady Chef"]                                = true,
+    ["The Stranded Sharkman"]                    = true,
+    ["The True Sharkman"]                        = true,
+    ["The Deprived Damsel"]                      = true,
+    ["The Swordsman"]                            = true,
+    ["The Judicious Jailor"]                     = true,
+    ["The Useless Kunoichi"]                     = true,
+    ["The Poorly Traveller"]                     = true,
+    ["The Notorious Negotiator"]                 = true,
+    ["The Dazzling Dyer"]                        = true,
+    ["The Scarlet Slowcoach"]                    = true,
+    ["The Cunning Collector"]                    = true,
+    ["The Exiled Kunoichi"]                      = true,
+    ["The Spinebreaker"]                         = true,
+    ["The Tempest Tutor"]                        = true,
+    ["The Summoner"]                             = true,
+    ["The Slithering Sannin"]                    = true,
+    ["Food Merchant"]                            = true,
+    ["Merchant"]                                 = true,
+    ["Medic"]                                    = true,
+    ["InnKeeper"]                                = true,
+    ["OutKeeper"]                                = true,
+    ["Training Instructor"]                      = true,
+    ["Combat Instructor"]                        = true,
+    ["Sorythia Sensei"]                          = true,
+    ["Chakra Man"]                               = true,
+    ["Ino"]                                      = true,
+    ["Choji"]                                    = true,
+    ["Crabuto"]                                  = true,
+    ["Eldest Elder"]                             = true,
+    ["Hyuga Elder"]                              = true,
+    ["Undead Cook"]                              = true,
+    ["Lavaroldy"]                                = true,
+    ["Chieftess Kaguya Oceansucks, Former Anbu"] = true,
+}
+
+-- ============================================================
+--  DYNAMIC MATCHA UI STATE MANAGEMENT
+--  Reads directly from UI.GetValue to respond instantly to toggles
+-- ============================================================
+local function getUI(key, default)
+    local v = UI.GetValue(key)
+    if v ~= nil then
+        return v
+    end
+    return default
+end
+
+local function initUI(key, default)
+    if UI.GetValue(key) == nil then
+        UI.SetValue(key, default)
+    end
+end
+
+-- Initialize default settings only if not already set (preserves user settings)
+initUI("bl_mob_en", true)
+initUI("bl_mob_box", true)
+initUI("bl_mob_en", true)
+initUI("bl_mob_box", true)
+initUI("bl_mob_name", true)
+initUI("bl_mob_hp_t", true)
+initUI("bl_mob_hp_b", true)
+initUI("bl_mob_dist", true)
+initUI("bl_mob_clean", true)
+initUI("bl_mob_boss", false)
+
+initUI("bl_corrupt_en", false)
+initUI("bl_corrupt_box", true)
+initUI("bl_corrupt_name", true)
+initUI("bl_corrupt_dist", true)
+initUI("bl_corrupt_dest", true)
+
+initUI("bl_cs_en", true)
+initUI("bl_cs_notify", true)
+initUI("bl_cs_use_notify", true)
+initUI("bl_cs_hud", true)
+
+initUI("bl_npc_en", false)
+initUI("bl_npc_box", false)
+initUI("bl_npc_name", true)
+initUI("bl_npc_dist", true)
+
+initUI("bl_rare_notif", true)
+initUI("bl_rare_trc", true)
+initUI("bl_r_life", true)
+initUI("bl_r_forg", true)
+initUI("bl_r_chak", true)
+initUI("bl_r_scrl", true)
+initUI("bl_r_rings", true)
+initUI("bl_r_schem", true)
+initUI("bl_r_eyes", true)
+initUI("bl_ev_beast_tamer", true)
+initUI("bl_ev_beast_esp", false)
+
+initUI("bl_item_en", true)
+initUI("bl_item_box", false)
+initUI("bl_item_name", true)
+initUI("bl_item_dist", true)
+initUI("f_common_fruit", true)
+initUI("f_bells", false)
+initUI("f_seaweed", false)
+initUI("f_gloweed", false)
+initUI("f_other", true)
+
+-- Apply requested defaults
+if UI.GetValue("bl_v6_defaults") ~= true then
+    UI.SetValue("bl_corrupt_en", false)
+    UI.SetValue("bl_npc_box", false)
+    UI.SetValue("bl_item_box", false)
+    UI.SetValue("bl_ev_beast_esp", false)
+    UI.SetValue("f_bells", false)
+    UI.SetValue("f_seaweed", false)
+    UI.SetValue("f_gloweed", false)
+    UI.SetValue("f_common_fruit", true)
+    UI.SetValue("bl_v6_defaults", true)
+end
+
+UI.AddTab("Bloodline", function(tab)
+    -- ================= LEFT COLUMN =================
+    local mobSec = tab:Section("Combat Mobs ESP", "Left")
+    mobSec:Toggle("bl_mob_en", "Combat Mobs Enabled", getUI("bl_mob_en", true), function(v) UI.SetValue("bl_mob_en", v) end)
+    mobSec:Keybind("bl_mob_kb", 0, "toggle")
+    mobSec:Toggle("bl_mob_box", "Show Boxes", getUI("bl_mob_box", true), function(v) UI.SetValue("bl_mob_box", v) end)
+    mobSec:ColorPicker("bl_mob_col", 1, 0.23, 0.23, 1, function() end)
+    mobSec:Toggle("bl_mob_name", "Show Name", getUI("bl_mob_name", true), function(v) UI.SetValue("bl_mob_name", v) end)
+    mobSec:Toggle("bl_mob_hp_t", "Show HP Text", getUI("bl_mob_hp_t", true), function(v) UI.SetValue("bl_mob_hp_t", v) end)
+    mobSec:Toggle("bl_mob_hp_b", "Show Health Bar", getUI("bl_mob_hp_b", true), function(v) UI.SetValue("bl_mob_hp_b", v) end)
+    mobSec:Toggle("bl_mob_dist", "Show Distance", getUI("bl_mob_dist", true), function(v) UI.SetValue("bl_mob_dist", v) end)
+    mobSec:Toggle("bl_mob_clean", "Clean Name Numbers", getUI("bl_mob_clean", true), function(v) UI.SetValue("bl_mob_clean", v) end)
+    mobSec:Toggle("bl_mob_boss", "Bosses Only (>500 HP)", getUI("bl_mob_boss", false), function(v) UI.SetValue("bl_mob_boss", v) end)
+
+    local corruptSec = tab:Section("Corruption Points", "Left")
+    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", getUI("bl_corrupt_en", false), function(v) UI.SetValue("bl_corrupt_en", v) end)
+    corruptSec:Keybind("bl_corrupt_kb", 0, "toggle")
+    corruptSec:Toggle("bl_corrupt_box", "Show Boxes", getUI("bl_corrupt_box", true), function(v) UI.SetValue("bl_corrupt_box", v) end)
+    corruptSec:ColorPicker("bl_corrupt_col", 0.68, 0.17, 1.0, 1, function() end)
+    corruptSec:Toggle("bl_corrupt_name", "Show Name", getUI("bl_corrupt_name", true), function(v) UI.SetValue("bl_corrupt_name", v) end)
+    corruptSec:Toggle("bl_corrupt_dist", "Show Distance", getUI("bl_corrupt_dist", true), function(v) UI.SetValue("bl_corrupt_dist", v) end)
+    corruptSec:Toggle("bl_corrupt_dest", "Hide If Destroyed", getUI("bl_corrupt_dest", true), function(v) UI.SetValue("bl_corrupt_dest", v) end)
+
+    local csSec = tab:Section("Chakra Sense Radar", "Left")
+    csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", getUI("bl_cs_en", true), function(v) UI.SetValue("bl_cs_en", v) end)
+    csSec:Toggle("bl_cs_notify", "Notify On Detected", getUI("bl_cs_notify", true), function(v) UI.SetValue("bl_cs_notify", v) end)
+    csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", getUI("bl_cs_use_notify", true), function(v) UI.SetValue("bl_cs_use_notify", v) end)
+    csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", getUI("bl_cs_hud", true), function(v) UI.SetValue("bl_cs_hud", v) end)
+
+    -- ================= RIGHT COLUMN =================
+    local npcSec = tab:Section("Town & Friendly NPCs", "Right")
+    npcSec:Toggle("bl_npc_en", "NPCs Enabled", getUI("bl_npc_en", false), function(v) UI.SetValue("bl_npc_en", v) end)
+    npcSec:Keybind("bl_npc_kb", 0, "toggle")
+    npcSec:Toggle("bl_npc_box", "Show Boxes", getUI("bl_npc_box", false), function(v) UI.SetValue("bl_npc_box", v) end)
+    npcSec:ColorPicker("bl_npc_col", 0, 0.82, 1.0, 1, function() end)
+    npcSec:Toggle("bl_npc_name", "Show Name", getUI("bl_npc_name", true), function(v) UI.SetValue("bl_npc_name", v) end)
+    npcSec:Toggle("bl_npc_dist", "Show Distance", getUI("bl_npc_dist", true), function(v) UI.SetValue("bl_npc_dist", v) end)
+
+    local rareSec = tab:Section("Rare Items & Alerts", "Right")
+    rareSec:Toggle("bl_rare_notif", "Proximity Notify Popup", getUI("bl_rare_notif", true), function(v) UI.SetValue("bl_rare_notif", v) end)
+    rareSec:Toggle("bl_rare_trc", "Directional Tracer Lines", getUI("bl_rare_trc", true), function(v) UI.SetValue("bl_rare_trc", v) end)
+    rareSec:Toggle("bl_r_life", "Life Up Fruit", getUI("bl_r_life", true), function(v) UI.SetValue("bl_r_life", v) end)
+    rareSec:Toggle("bl_r_forg", "Fruit of Forgetfulness", getUI("bl_r_forg", true), function(v) UI.SetValue("bl_r_forg", v) end)
+    rareSec:Toggle("bl_r_chak", "Chakra Fruit", getUI("bl_r_chak", true), function(v) UI.SetValue("bl_r_chak", v) end)
+    rareSec:Toggle("bl_r_scrl", "Scrolls (Mastery/Trait/Summon)", getUI("bl_r_scrl", true), function(v) UI.SetValue("bl_r_scrl", v) end)
+    rareSec:Toggle("bl_r_rings", "Rare Rings", getUI("bl_r_rings", true), function(v) UI.SetValue("bl_r_rings", v) end)
+    rareSec:Toggle("bl_r_schem", "Schematics", getUI("bl_r_schem", true), function(v) UI.SetValue("bl_r_schem", v) end)
+    rareSec:Toggle("bl_r_eyes", "Rare Eyes (Sharingan, Rinnegan...)", getUI("bl_r_eyes", true), function(v) UI.SetValue("bl_r_eyes", v) end)
+    rareSec:Toggle("bl_ev_beast_tamer", "Beast Tamer Event Notify", getUI("bl_ev_beast_tamer", true), function(v) UI.SetValue("bl_ev_beast_tamer", v) end)
+    rareSec:Toggle("bl_ev_beast_esp", "Beast Tamer ESP & Tracer", getUI("bl_ev_beast_esp", false), function(v) UI.SetValue("bl_ev_beast_esp", v) end)
+
+    local itemSec = tab:Section("Items (Fruits, Bells, Drops)", "Right")
+    itemSec:Toggle("bl_item_en", "Items ESP Enabled", getUI("bl_item_en", true), function(v) UI.SetValue("bl_item_en", v) end)
+    itemSec:Keybind("bl_item_kb", 0, "toggle")
+    itemSec:Toggle("bl_item_box", "Show Boxes", getUI("bl_item_box", false), function(v) UI.SetValue("bl_item_box", v) end)
+    itemSec:Toggle("bl_item_name", "Show Names", getUI("bl_item_name", true), function(v) UI.SetValue("bl_item_name", v) end)
+    itemSec:Toggle("bl_item_dist", "Show Distance", getUI("bl_item_dist", true), function(v) UI.SetValue("bl_item_dist", v) end)
+    itemSec:Toggle("f_common_fruit", "Common Fruit", getUI("f_common_fruit", true), function(v) UI.SetValue("f_common_fruit", v) end)
+    itemSec:Toggle("f_bells", "Bells (Sealing / Training)", getUI("f_bells", false), function(v) UI.SetValue("f_bells", v) end)
+    itemSec:Toggle("f_seaweed", "Seaweed", getUI("f_seaweed", false), function(v) UI.SetValue("f_seaweed", v) end)
+    itemSec:Toggle("f_gloweed", "Gloweed", getUI("f_gloweed", false), function(v) UI.SetValue("f_gloweed", v) end)
+    itemSec:Toggle("f_other", "Other Drops", getUI("f_other", true), function(v) UI.SetValue("f_other", v) end)
+end)
+
+-- ============================================================
+--  STREAMLINED DRAWING POOLS (12 Mobs, 16 Items, 8 NPCs, 8 Corrupt)
+-- ============================================================
+local MOB_POOL_SIZE     = 12
+local ITEM_POOL_SIZE    = 16
+local NPC_POOL_SIZE     = 8
+local CORRUPT_POOL_SIZE = 8
+
+local mobPool     = {}
+local itemPool    = {}
+local npcPool     = {}
+local corruptPool = {}
+
+for i = 1, MOB_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local barBg = Drawing.new("Square")
+    barBg.Thickness = 1; barBg.Filled = true; barBg.Color = COL_BAR_BG; barBg.Visible = false
+
+    local bar = Drawing.new("Square")
+    bar.Thickness = 1; bar.Filled = true; bar.Color = COL_GREEN; bar.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    mobPool[i] = { box = box, barBg = barBg, bar = bar, tag = tag, isShown = false, lastText = "", lastBarColor = nil }
+end
+
+for i = 1, CORRUPT_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    corruptPool[i] = { box = box, tag = tag, isShown = false, lastText = "" }
+end
+
+for i = 1, NPC_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    npcPool[i] = { box = box, tag = tag, isShown = false, lastText = "" }
+end
+
+for i = 1, ITEM_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1.5; tracer.Visible = false
+
+    itemPool[i] = { box = box, tag = tag, tracer = tracer, isShown = false, lastText = "" }
+end
+
+local csHudTitle = Drawing.new("Text")
+csHudTitle.Size = 13
+csHudTitle.Font = Drawing.Fonts.SystemBold
+csHudTitle.Color = Color3.fromRGB(0, 220, 255)
+csHudTitle.Outline = true
+csHudTitle.Visible = false
+csHudTitle.Position = Vector2.new(16, 220)
+
+local csHudContent = Drawing.new("Text")
+csHudContent.Size = 12
+csHudContent.Font = Drawing.Fonts.System
+csHudContent.Color = Color3.fromRGB(240, 240, 240)
+csHudContent.Outline = true
+csHudContent.Visible = false
+csHudContent.Position = Vector2.new(16, 238)
+local lastCsHudText = ""
+
+local function hideMobSlot(s)
+    if not s then return end
+    s.isShown = false
+    if s.box.Visible then s.box.Visible = false end
+    if s.barBg.Visible then s.barBg.Visible = false end
+    if s.bar.Visible then s.bar.Visible = false end
+    if s.tag.Visible then s.tag.Visible = false end
+    s.lastText = ""
+    s.lastBarColor = nil
+end
+
+local function hideCorruptSlot(s)
+    if not s then return end
+    s.isShown = false
+    if s.box.Visible then s.box.Visible = false end
+    if s.tag.Visible then s.tag.Visible = false end
+    s.lastText = ""
+end
+
+local function hideNPCSlot(s)
+    if not s then return end
+    s.isShown = false
+    if s.box.Visible then s.box.Visible = false end
+    if s.tag.Visible then s.tag.Visible = false end
+    s.lastText = ""
+end
+
+local function hideItemSlot(s)
+    if not s then return end
+    s.isShown = false
+    if s.box.Visible then s.box.Visible = false end
+    if s.tag.Visible then s.tag.Visible = false end
+    if s.tracer.Visible then s.tracer.Visible = false end
+    s.lastText = ""
+end
+
+local eventBox = Drawing.new("Square")
+eventBox.Thickness = 2
+eventBox.Filled = false
+eventBox.Color = Color3.fromRGB(255, 215, 0)
+eventBox.Visible = false
+
+local eventTag = Drawing.new("Text")
+eventTag.Size = 14
+eventTag.Font = Drawing.Fonts.SystemBold
+eventTag.Center = true
+eventTag.Outline = true
+eventTag.Color = Color3.fromRGB(255, 230, 80)
+eventTag.Visible = false
+
+local eventTracer = Drawing.new("Line")
+eventTracer.Thickness = 1.5
+eventTracer.Color = Color3.fromRGB(255, 215, 0)
+eventTracer.Visible = false
+
+local function hideEventSlot()
+    if eventBox.Visible then eventBox.Visible = false end
+    if eventTag.Visible then eventTag.Visible = false end
+    if eventTracer.Visible then eventTracer.Visible = false end
+end
+
+_G.Bloodline_mobPool     = mobPool
+_G.Bloodline_corruptPool = corruptPool
+_G.Bloodline_npcPool     = npcPool
+_G.Bloodline_itemPool    = itemPool
+_G.Bloodline_csHudTitle  = csHudTitle
+_G.Bloodline_csHudContent= csHudContent
+_G.Bloodline_eventBox    = eventBox
+_G.Bloodline_eventTag    = eventTag
+_G.Bloodline_eventTracer = eventTracer
+_G.Bloodline_running     = true
+
+-- ============================================================
+--  GLOBAL CLEANUP
+-- ============================================================
+_G.Bloodline_cleanup = function()
+    _G.Bloodline_running = false
+
+    if _G.Bloodline_renderConn then
+        pcall(function() _G.Bloodline_renderConn:Disconnect() end)
+        _G.Bloodline_renderConn = nil
+    end
+
+    if _G.Bloodline_csHudTitle then
+        pcall(function() _G.Bloodline_csHudTitle:Remove() end)
+        _G.Bloodline_csHudTitle = nil
+    end
+
+    if _G.Bloodline_csHudContent then
+        pcall(function() _G.Bloodline_csHudContent:Remove() end)
+        _G.Bloodline_csHudContent = nil
+    end
+
+    if _G.Bloodline_eventBox then
+        pcall(function() _G.Bloodline_eventBox:Remove() end)
+        _G.Bloodline_eventBox = nil
+    end
+
+    if _G.Bloodline_eventTag then
+        pcall(function() _G.Bloodline_eventTag:Remove() end)
+        _G.Bloodline_eventTag = nil
+    end
+
+    if _G.Bloodline_eventTracer then
+        pcall(function() _G.Bloodline_eventTracer:Remove() end)
+        _G.Bloodline_eventTracer = nil
+    end
+
+    if _G.Bloodline_mobPool then
+        for _, s in ipairs(_G.Bloodline_mobPool) do
+            pcall(function() s.box:Remove(); s.barBg:Remove(); s.bar:Remove(); s.tag:Remove() end)
+        end
+        _G.Bloodline_mobPool = nil
+    end
+
+    if _G.Bloodline_corruptPool then
+        for _, s in ipairs(_G.Bloodline_corruptPool) do
+            pcall(function() s.box:Remove(); s.tag:Remove() end)
+        end
+        _G.Bloodline_corruptPool = nil
+    end
+
+    if _G.Bloodline_npcPool then
+        for _, s in ipairs(_G.Bloodline_npcPool) do
+            pcall(function() s.box:Remove(); s.tag:Remove() end)
+        end
+        _G.Bloodline_npcPool = nil
+    end
+
+    if _G.Bloodline_itemPool then
+        for _, s in ipairs(_G.Bloodline_itemPool) do
+            pcall(function() s.box:Remove(); s.tag:Remove(); s.tracer:Remove() end)
+        end
+        _G.Bloodline_itemPool = nil
+    end
+
+    pcall(function() UI.RemoveTab("Bloodline") end)
+    pcall(function() UI.RemoveTab("Event Notifier") end)
+end
+
+-- ============================================================
+--  LOOP 1: FAST 0.35s COLLECTOR
+--  - Universal Pickupable Item Detection (Fruits, Bells, Seaweed)
+--  - Corruption Points Scanner (game.Workspace.CorruptedPoint)
+--  - Precision Mob Classifier (Excludes Town NPCs cleanly)
+-- ============================================================
+local trackedMobs          = {}
+local trackedCorrupt       = {}
+local trackedNPCs          = {}
+local trackedItems         = {}
+local notifiedItems        = {}
+local trackedChakraUsers   = {}
+local notifiedChakraUsers  = {}
+local lastChakraCastState  = {}
+local trackedBeastTamer    = nil
+local notifiedBeastTamer   = {}
+
+task.spawn(function()
+    while _G.Bloodline_running do
+        local okScan, scanErr = pcall(function()
+            local lp = Players.LocalPlayer
+            local lpChar = lp and lp.Character
+            local lpRoot = lpChar and (lpChar:FindFirstChild("HumanoidRootPart") or lpChar:FindFirstChild("Torso"))
+            local myPos = lpRoot and lpRoot.Position or Vector3.new(0, 0, 0)
+            local myName = lp and lp.Name or ""
+
+            local playerNames = {}
+            local pList = Players:GetPlayers()
+            for i = 1, #pList do
+                local p = pList[i]
+                if p then playerNames[tostring(p.Name or "")] = true end
+            end
+
+            local children = Workspace:GetChildren()
+            local total = #children
+            local freshMobs       = {}
+            local freshCorrupt    = {}
+            local freshNPCs       = {}
+            local freshItems      = {}
+            local liveFruitAddrs  = {}
+            local freshBeastTamer = nil
+            local liveBeastKeys   = {}
+
+            for i = 1, total do
+                local obj = children[i]
+                if not obj then continue end
+
+                local cname = obj.ClassName
+                -- Quick scenery skip
+                if cname == "Part" or cname == "WedgePart" or cname == "CornerWedgePart" or cname == "TrussPart" or cname == "Terrain" or cname == "Folder" then
+                    continue
+                end
+
+                local objName = tostring(obj.Name or "")
+                if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then continue end
+
+                -- 0. SPECIAL EVENT SCANNER: "Beast Tamer"
+                if cname == "Model" and (objName == "Beast Tamer" or string.find(string.lower(objName), "beast tamer")) then
+                    local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
+                    if root then
+                        local okP, p = pcall(function() return root.Position end)
+                        local okAddr, addr = pcall(function() return obj.Address end)
+                        local key = addr or objName
+                        if okP and isValidVec3(p) then
+                            freshBeastTamer = {
+                                model = obj,
+                                root  = root,
+                                pos   = p,
+                                key   = key
+                            }
+                            liveBeastKeys[key] = true
+                            if not notifiedBeastTamer[key] then
+                                notifiedBeastTamer[key] = true
+                                if getUI("bl_ev_beast_tamer", true) then
+                                    local d = math.floor((myPos - p).Magnitude)
+                                    notify("EVENT ALERT!", string.format("Beast Tamer has spawned! [%dm away]", d), 10)
+                                end
+                            end
+                        end
+                    end
+                    continue
+                end
+
+                -- 1. CORRUPTED POINT SCANNER (game.Workspace.CorruptedPoint)
+                if objName == "CorruptedPoint" and cname == "Model" then
+                    local dest = obj:FindFirstChild("Destroyed")
+                    local isDestroyed = dest and dest.Value == true
+                    if not (getUI("bl_corrupt_dest", true) and isDestroyed) then
+                        local main = obj:FindFirstChild("Main") or obj:FindFirstChild("InnerPool") or obj:FindFirstChildOfClass("BasePart")
+                        if main then
+                            local okP, p = pcall(function() return main.Position end)
+                            if okP and isValidVec3(p) then
+                                table.insert(freshCorrupt, {
+                                    pos = p,
+                                    isDestroyed = isDestroyed
+                                })
+                            end
+                        end
+                    end
+
+                -- 2. UNIVERSAL PICKUPABLE ITEM DETECTOR
+                -- Matches Fruits, Scrolls, Sealing Bells, Training Bells, Seaweed, and ClickDetector/PickUp items
+                elseif cname ~= "Camera" then
+                    -- Quick skip for known combat VFX parts or static jewelry props
+                    if STATIC_PROP_NAMES[objName]
+                        or COMMON_RINGS[objName]
+                        or objName == "Ring"
+                        or objName == "Gold Enclosed Ring"
+                        or objName == "Necklace"
+                        or string.find(objName, "Shock")
+                        or string.find(objName, "ThinRing")
+                        or string.find(objName, "MovingRing") then
+                        continue
+                    end
+
+                    local isRareRing = (RARE_ITEMS[objName] ~= nil and RARE_ITEMS[objName].filter == "Rings")
+
+                    local isPickupable = (KNOWN_ITEMS[objName] and not COMMON_RINGS[objName])
+                        or RARE_ITEMS[objName] ~= nil
+                        or isRareRing
+                        or string.find(objName, "Schematic")
+                        or string.find(objName, " Eyes")
+                        or obj:FindFirstChild("ItemDetector") ~= nil
+                        or obj:FindFirstChild("PickUp") ~= nil
+                        or obj:FindFirstChild("Pickupable") ~= nil
+                        or obj:FindFirstChildOfClass("ClickDetector") ~= nil
+                        or obj:FindFirstChildOfClass("ProximityPrompt") ~= nil
+
+                    if isPickupable then
+                        local isCommonRing = COMMON_RINGS[objName]
+                            or (objName:lower() == "ring")
+                            or (objName:lower() == "gold ring")
+                            or (objName:lower() == "golden ring")
+                            or (objName:lower() == "gold enclosed ring")
+                            or (objName:lower() == "common ring")
+                            or (objName:lower() == "necklace")
+
+                        if isCommonRing then
+                            continue
+                        end
+
+                        local rareInfo = RARE_ITEMS[objName]
+                        if not rareInfo then
+                            if string.find(objName, "Schematic") then
+                                rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "★ " .. objName .. " ★", filter = "Schematics" }
+                            elseif string.find(objName, " Eyes") then
+                                rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "★ " .. objName .. " ★", filter = "Eyes" }
+                            end
+                        end
+                        local okPos, pos = pcall(function()
+                            local p = obj.Position
+                            if not p and cname == "Model" then
+                                local part = obj.PrimaryPart or obj:FindFirstChild("Handle") or obj:FindFirstChildOfClass("Part") or obj:FindFirstChildOfClass("MeshPart")
+                                p = part and part.Position
+                            end
+                            return p
+                        end)
+                        local okAddr, addr = pcall(function() return obj.Address end)
+
+                        if okPos and isValidVec3(pos) then
+                            if rareInfo and okAddr and addr then
+                                liveFruitAddrs[addr] = true
+                                if not notifiedItems[addr] then
+                                    notifiedItems[addr] = true
+                                    if getUI("bl_rare_notif", true) then
+                                        local d = math.floor((myPos - pos).Magnitude)
+                                        notify("Rare Item Alert!", string.format("%s spawned near you! [%dm away]", rareInfo.label, d), 8)
+                                    end
+                                end
+                            end
+
+                            table.insert(freshItems, {
+                                item     = obj,
+                                name     = objName,
+                                pos      = pos,
+                                isRare   = (rareInfo ~= nil),
+                                rareInfo = rareInfo
+                            })
+                        end
+
+                    -- 3. Models (Combat Mobs & Town NPCs)
+                    elseif cname == "Model" and objName:sub(1, 4) ~= "Tree" and objName:sub(1, 7) ~= "Caravan" then
+                        if not playerNames[objName] and objName ~= myName then
+                            local tagObj = obj:FindFirstChild("NPC")
+                            if tagObj then
+                                local hum = obj:FindFirstChildOfClass("Humanoid")
+                                local root = obj:FindFirstChild("HumanoidRootPart")
+                                    or obj:FindFirstChild("Torso")
+                                    or obj:FindFirstChild("UpperTorso")
+
+                                if hum and root then
+                                    local okHp, hp = pcall(function() return hum.Health end)
+                                    if okHp and isValidNum(hp) and hp > 0 then
+                                        local tagVal = tostring(tagObj.Value or "")
+                                        local maxHp = hum.MaxHealth or 100
+
+                                        -- Precision Friendly vs Combat Classifier
+                                        local isKnownFriendly = (tagVal == "Dialog")
+                                            or FRIENDLY_NPCS[objName]
+                                            or (maxHp <= 100 and tagVal ~= "Combat" and not objName:find("Bandit") and not objName:find("Guard") and not objName:find("Clone"))
+
+                                        local isCombat = not isKnownFriendly and (
+                                            (tagVal == "Combat")
+                                            or (objName:find("Bandit") ~= nil)
+                                            or (objName:find("Guard") ~= nil)
+                                            or (objName:find("Manda") ~= nil)
+                                            or (objName:find("Snake") ~= nil)
+                                            or (objName:find("Rogue") ~= nil)
+                                            or (objName:find("Zetsu") ~= nil)
+                                            or (objName:find("Boss") ~= nil)
+                                            or (objName:find("Lavarossa") ~= nil)
+                                            or (objName:find("The Barbarian") ~= nil)
+                                            or (objName:find("Barbarit") ~= nil)
+                                            or (objName:find("Clone") ~= nil)
+                                            or (objName:find("Dummy") ~= nil)
+                                            or (objName:find("Instructor Clone") ~= nil)
+                                            or (objName:find("Clay Runner") ~= nil)
+                                            or (objName:find("Runner") ~= nil)
+                                            or (objName:find("Cratos") ~= nil)
+                                            or (objName:find("Tairock") ~= nil)
+                                            or (maxHp > 100)
+                                            or (hp < maxHp)
+                                        )
+
+                                        local cleanName = getUI("bl_mob_clean", true) and string.gsub(objName, "%d+$", "") or objName
+
+                                        if isCombat then
+                                            table.insert(freshMobs, {
+                                                root      = root,
+                                                hum       = hum,
+                                                name      = cleanName,
+                                                maxHp     = maxHp
+                                            })
+                                        else
+                                            table.insert(freshNPCs, {
+                                                root      = root,
+                                                name      = cleanName
+                                            })
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            for addr, _ in pairs(notifiedItems) do
+                if not liveFruitAddrs[addr] then
+                    notifiedItems[addr] = nil
+                end
+            end
+
+            trackedMobs    = freshMobs
+            trackedCorrupt = freshCorrupt
+            trackedNPCs    = freshNPCs
+            trackedItems   = freshItems
+
+            -- 4. CHAKRA SENSE SCANNER (game.ReplicatedStorage.Cooldowns)
+            local freshChakra = {}
+            if getUI("bl_cs_en", true) then
+                local cdFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
+                if cdFolder then
+                    local cdList = cdFolder:GetChildren()
+                    for i = 1, #cdList do
+                        local pFolder = cdList[i]
+                        if pFolder then
+                            local csVal = pFolder:FindFirstChild("Chakra Sense")
+                            if csVal then
+                                local pName = pFolder.Name
+                                local char = Workspace:FindFirstChild(pName)
+                                local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
+                                local isCasting = torso and (torso:FindFirstChild("ChakraSense") ~= nil) or false
+
+                                table.insert(freshChakra, {
+                                    name = pName,
+                                    isCasting = isCasting
+                                })
+
+                                -- Notify when detected in server
+                                if not notifiedChakraUsers[pName] then
+                                    notifiedChakraUsers[pName] = true
+                                    if getUI("bl_cs_notify", true) then
+                                        notify("Chakra Sense Detected!", string.format("%s has Chakra Sense in loadout!", pName), 7)
+                                    end
+                                end
+
+                                -- Notify when actively casting
+                                if isCasting then
+                                    if not lastChakraCastState[pName] then
+                                        lastChakraCastState[pName] = true
+                                        if getUI("bl_cs_use_notify", true) then
+                                            notify("CHAKRA SENSE ACTIVE!", string.format("%s is using Chakra Sense right now!", pName), 6)
+                                        end
+                                    end
+                                else
+                                    lastChakraCastState[pName] = false
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            for pName, _ in pairs(notifiedChakraUsers) do
+                if not playerNames[pName] then
+                    notifiedChakraUsers[pName] = nil
+                    lastChakraCastState[pName] = nil
+                end
+            end
+
+            trackedChakraUsers = freshChakra
+
+            for key, _ in pairs(notifiedBeastTamer) do
+                if not liveBeastKeys[key] then
+                    notifiedBeastTamer[key] = nil
+                end
+            end
+            _G.Bloodline_beastTamerSpawned = (freshBeastTamer ~= nil)
+            trackedBeastTamer = freshBeastTamer
+        end)
+
+        if not okScan then
+            logDebug("Collector error: " .. tostring(scanErr))
+        end
+
+        task.wait(0.35)
+    end
+end)
+
+-- ============================================================
+--  LOOP 2: ZERO-LOOKUP 60-FPS RENDERER
+-- ============================================================
+local lastCamPos = Vector3.new(0, 0, 0)
+local lastRenderClock = 0
+local TARGET_FRAME_TIME = 1.0 / 60.0
+
+_G.Bloodline_renderFrameCount = 0
+_G.Bloodline_lastError = nil
+
+_G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
+    if not _G.Bloodline_running then return end
+
+    local now = os.clock()
+    if (now - lastRenderClock) < TARGET_FRAME_TIME then
+        return
+    end
+    lastRenderClock = now
+
+    _G.Bloodline_renderFrameCount = _G.Bloodline_renderFrameCount + 1
+
+    local okGlobal, globalErr = pcall(function()
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        local camPos = cam.Position
+        if not isValidVec3(camPos) then return end
+
+        local viewport = cam.ViewportSize
+        if not viewport or viewport.X <= 20 or viewport.Y <= 20 then return end
+        local vpW = viewport.X
+        local vpH = viewport.Y
+        local screenBottomX = math.floor(vpW * 0.5)
+        local screenBottomY = math.floor(vpH)
+
+        local fovRad = math.rad(cam.FieldOfView or 70)
+        local tanHalfFov2 = math.tan(fovRad * 0.5) * 2.0
+        if not isValidNum(tanHalfFov2) or tanHalfFov2 <= 0.001 then return end
+
+        -- Fast Travel Flush (>100 studs jump in 1 frame)
+        local camDelta = (camPos - lastCamPos).Magnitude
+        if camDelta > 100.0 then
+            trackedMobs    = {}
+            trackedCorrupt = {}
+            trackedNPCs    = {}
+            trackedItems   = {}
+        end
+        lastCamPos = camPos
+
+        -- ========================================================
+        -- 1. COMBAT MOBS
+        -- ========================================================
+        local mobSlot = 0
+        local mobEnabled = getUI("bl_mob_en", true)
+
+        if mobEnabled then
+            local maxDist    = 100000
+            local showBox    = getUI("bl_mob_box", true)
+            local showHpBar  = getUI("bl_mob_hp_b", true)
+            local showName   = getUI("bl_mob_name", true)
+            local showHpTxt  = getUI("bl_mob_hp_t", true)
+            local showDist   = getUI("bl_mob_dist", true)
+            local bossOnly   = getUI("bl_mob_boss", false)
+            local boxColor   = COL_RED
+            local nameColor  = Color3.fromRGB(255, 255, 255)
+            local mobs       = trackedMobs
+
+            for i = 1, #mobs do
+                if mobSlot >= MOB_POOL_SIZE then break end
+                local m = mobs[i]
+
+                pcall(function()
+                    if bossOnly and m.maxHp <= 500 then return end
+
+                    local rPos = m.root.Position
+                    if not isValidVec3(rPos) then return end
+
+                    local dist = (camPos - rPos).Magnitude
+                    if dist <= maxDist and dist > 0.5 then
+                        local screenPos, onScreen = WorldToScreen(rPos)
+                        if onScreen and isValidVec2(screenPos) then
+                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
+                            if not isValidNum(rawH) then return end
+
+                            local h = math.clamp(math.floor(rawH), 16, 450)
+                            local w = math.clamp(math.floor(h * 0.55), 8, 300)
+                            local halfW = math.floor(w * 0.5)
+                            local halfH = math.floor(h * 0.5)
+                            local boxX = math.floor(screenPos.X - halfW)
+                            local boxY = math.floor(screenPos.Y - halfH)
+
+                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
+
+                            local hp = m.hum.Health
+                            if not isValidNum(hp) or hp <= 0 then return end
+                            local maxHp = m.maxHp
+                            local hpPct = math.clamp(hp / maxHp, 0, 1)
+                            local fillH = math.clamp(math.floor(h * hpPct), 0, h)
+
+                            mobSlot = mobSlot + 1
+                            local e = mobPool[mobSlot]
+
+                            -- Box
+                            if showBox then
+                                e.box.Position = Vector2.new(boxX, boxY)
+                                e.box.Size = Vector2.new(w, h)
+                                if not e.box.Visible then
+                                    e.box.Color = boxColor
+                                    e.box.Visible = true
+                                end
+                            elseif e.box.Visible then
+                                e.box.Visible = false
+                            end
+
+                            -- Health Bar
+                            if showHpBar then
+                                local barX = boxX - 5
+                                e.barBg.Position = Vector2.new(barX, boxY)
+                                e.barBg.Size = Vector2.new(3, h)
+
+                                e.bar.Position = Vector2.new(barX, boxY + (h - fillH))
+                                e.bar.Size = Vector2.new(3, math.max(1, fillH))
+
+                                local targetColor = (hpPct > 0.5 and COL_GREEN) or (hpPct > 0.25 and COL_YELLOW) or COL_RED
+                                if e.lastBarColor ~= targetColor then
+                                    e.bar.Color = targetColor
+                                    e.lastBarColor = targetColor
+                                end
+
+                                if not e.barBg.Visible then
+                                    e.barBg.Visible = true
+                                    e.bar.Visible = true
+                                end
+                            elseif e.barBg.Visible then
+                                e.barBg.Visible = false
+                                e.bar.Visible = false
+                            end
+
+                            -- Name / HP Text / Distance
+                            if showName or showHpTxt or showDist then
+                                local dInt = math.floor(dist)
+                                local curHp = math.floor(hp)
+                                local label = ""
+
+                                if showName then label = m.name end
+                                if showHpTxt then label = label .. " [" .. curHp .. "/" .. math.floor(maxHp) .. "]" end
+                                if showDist then label = label .. " " .. dInt .. "m" end
+
+                                if e.lastText ~= label then
+                                    e.tag.Text = tostring(label)
+                                    e.lastText = label
+                                end
+                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
+
+                                if not e.tag.Visible then
+                                    e.tag.Color = nameColor
+                                    e.tag.Visible = true
+                                end
+                            elseif e.tag.Visible then
+                                e.tag.Visible = false
+                            end
+
+                            e.isShown = true
+                        end
+                    end
+                end)
+            end
+        end
+
+        for i = mobSlot + 1, MOB_POOL_SIZE do
+            hideMobSlot(mobPool[i])
+        end
+
+        -- ========================================================
+        -- 2. CORRUPTION POINTS (game.Workspace.CorruptedPoint)
+        -- ========================================================
+        local corruptSlot = 0
+        local corruptEnabled = getUI("bl_corrupt_en", true)
+
+        if corruptEnabled then
+            local maxDist   = 100000
+            local showBox   = getUI("bl_corrupt_box", true)
+            local showName  = getUI("bl_corrupt_name", true)
+            local showDist  = getUI("bl_corrupt_dist", true)
+            local boxColor  = COL_PURPLE
+            local nameColor = COL_PURP_TXT
+            local corrupts  = trackedCorrupt
+
+            for i = 1, #corrupts do
+                if corruptSlot >= CORRUPT_POOL_SIZE then break end
+                local c = corrupts[i]
+
+                pcall(function()
+                    local pos = c.pos
+                    if not isValidVec3(pos) then return end
+
+                    local dist = (camPos - pos).Magnitude
+                    if dist <= maxDist and dist > 0.5 then
+                        local screenPos, onScreen = WorldToScreen(pos)
+                        if onScreen and isValidVec2(screenPos) then
+                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
+                            if not isValidNum(rawH) then return end
+
+                            local h = math.clamp(math.floor(rawH), 16, 450)
+                            local w = math.clamp(math.floor(h * 0.7), 10, 300)
+                            local halfW = math.floor(w * 0.5)
+                            local halfH = math.floor(h * 0.5)
+                            local boxX = math.floor(screenPos.X - halfW)
+                            local boxY = math.floor(screenPos.Y - halfH)
+
+                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
+
+                            corruptSlot = corruptSlot + 1
+                            local e = corruptPool[corruptSlot]
+
+                            if showBox then
+                                e.box.Position = Vector2.new(boxX, boxY)
+                                e.box.Size = Vector2.new(w, h)
+                                if not e.box.Visible then
+                                    e.box.Color = boxColor
+                                    e.box.Visible = true
+                                end
+                            elseif e.box.Visible then
+                                e.box.Visible = false
+                            end
+
+                            if showName or showDist then
+                                local label = ""
+                                if showName then label = "Corrupted Point" end
+                                if showDist then label = label .. " [" .. math.floor(dist) .. "m]" end
+
+                                if e.lastText ~= label then
+                                    e.tag.Text = tostring(label)
+                                    e.lastText = label
+                                end
+                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
+
+                                if not e.tag.Visible then
+                                    e.tag.Color = nameColor
+                                    e.tag.Visible = true
+                                end
+                            elseif e.tag.Visible then
+                                e.tag.Visible = false
+                            end
+
+                            e.isShown = true
+                        end
+                    end
+                end)
+            end
+        end
+
+        for i = corruptSlot + 1, CORRUPT_POOL_SIZE do
+            hideCorruptSlot(corruptPool[i])
+        end
+
+        -- ========================================================
+        -- 3. TOWN & FRIENDLY NPCS (Disabled by default)
+        -- ========================================================
+        local npcSlot = 0
+        local npcEnabled = getUI("bl_npc_en", false)
+
+        if npcEnabled then
+            local maxDist   = 100000
+            local showBox   = getUI("bl_npc_box", true)
+            local showName  = getUI("bl_npc_name", true)
+            local showDist  = getUI("bl_npc_dist", true)
+            local boxColor  = Color3.fromRGB(0, 210, 255)
+            local nameColor = Color3.fromRGB(255, 255, 255)
+            local npcs      = trackedNPCs
+
+            for i = 1, #npcs do
+                if npcSlot >= NPC_POOL_SIZE then break end
+                local n = npcs[i]
+
+                pcall(function()
+                    local rPos = n.root.Position
+                    if not isValidVec3(rPos) then return end
+
+                    local dist = (camPos - rPos).Magnitude
+                    if dist <= maxDist and dist > 0.5 then
+                        local screenPos, onScreen = WorldToScreen(rPos)
+                        if onScreen and isValidVec2(screenPos) then
+                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
+                            if not isValidNum(rawH) then return end
+
+                            local h = math.clamp(math.floor(rawH), 16, 450)
+                            local w = math.clamp(math.floor(h * 0.55), 8, 300)
+                            local halfW = math.floor(w * 0.5)
+                            local halfH = math.floor(h * 0.5)
+                            local boxX = math.floor(screenPos.X - halfW)
+                            local boxY = math.floor(screenPos.Y - halfH)
+
+                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
+
+                            npcSlot = npcSlot + 1
+                            local e = npcPool[npcSlot]
+
+                            if showBox then
+                                e.box.Position = Vector2.new(boxX, boxY)
+                                e.box.Size = Vector2.new(w, h)
+                                if not e.box.Visible then
+                                    e.box.Color = boxColor
+                                    e.box.Visible = true
+                                end
+                            elseif e.box.Visible then
+                                e.box.Visible = false
+                            end
+
+                            if showName or showDist then
+                                local label = n.name
+                                if showDist then label = label .. " [" .. math.floor(dist) .. "m]" end
+
+                                if e.lastText ~= label then
+                                    e.tag.Text = tostring(label)
+                                    e.lastText = label
+                                end
+                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
+
+                                if not e.tag.Visible then
+                                    e.tag.Color = nameColor
+                                    e.tag.Visible = true
+                                end
+                            elseif e.tag.Visible then
+                                e.tag.Visible = false
+                            end
+
+                            e.isShown = true
+                        end
+                    end
+                end)
+            end
+        end
+
+        for i = npcSlot + 1, NPC_POOL_SIZE do
+            hideNPCSlot(npcPool[i])
+        end
+
+        -- ========================================================
+        -- 4. ITEMS (Fruits, Bells, Seaweed & Drops)
+        -- ========================================================
+        local itemSlot = 0
+        local itemEnabled = getUI("bl_item_en", true)
+
+        if itemEnabled then
+            local maxDist     = 100000
+            local showBox     = getUI("bl_item_box", true)
+            local showName    = getUI("bl_item_name", true)
+            local showDist    = getUI("bl_item_dist", true)
+            local showTracers = getUI("bl_rare_trc", true)
+            local items       = trackedItems
+
+            for i = 1, #items do
+                if itemSlot >= ITEM_POOL_SIZE then break end
+                local it = items[i]
+
+                pcall(function()
+                    local isRare = it.isRare
+                    local rareInfo = it.rareInfo
+                    local name = it.name
+
+                    -- Granular Toggle Filter: Bells, Seaweed, Fruits, Drops
+                    local isAllowed = false
+                    if isRare then
+                        if rareInfo then
+                            local f = rareInfo.filter
+                            if f == "Life Up Fruit" then
+                                isAllowed = getUI("bl_r_life", true)
+                            elseif f == "Fruit of Forgetfulness" then
+                                isAllowed = getUI("bl_r_forg", true)
+                            elseif f == "Chakra Fruit" then
+                                isAllowed = getUI("bl_r_chak", true)
+                            elseif f == "Scrolls" then
+                                isAllowed = getUI("bl_r_scrl", true)
+                            elseif f == "Rings" then
+                                isAllowed = getUI("bl_r_rings", true)
+                            elseif f == "Schematics" then
+                                isAllowed = getUI("bl_r_schem", true)
+                            elseif f == "Eyes" then
+                                isAllowed = getUI("bl_r_eyes", true)
+                            else
+                                isAllowed = true
+                            end
+                        end
+                    else
+                        if name:find("Bells") then
+                            isAllowed = getUI("f_bells", false)
+                        elseif name:find("Gloweed") or name:find("Glowweed") then
+                            isAllowed = getUI("f_gloweed", false)
+                        elseif name:find("Seaweed") or name:find("Weed") then
+                            isAllowed = getUI("f_seaweed", false)
+                        elseif name == "Apple"
+                            or name == "Alluring Apple"
+                            or name == "Banana"
+                            or name == "Orange"
+                            or name == "Pear"
+                            or name == "Mango" then
+                            isAllowed = getUI("f_common_fruit", true)
+                        else
+                            isAllowed = getUI("f_other", true)
+                        end
+                    end
+                    if not isAllowed then return end
+
+                    local pos = it.pos or (it.item and it.item.Position)
+                    if not isValidVec3(pos) then return end
+
+                    local dist = (camPos - pos).Magnitude
+                    if dist <= maxDist and dist > 0.5 then
+                        local screenPos, onScreen = WorldToScreen(pos)
+                        if onScreen and isValidVec2(screenPos) then
+                            local radiusStuds = isRare and 2.4 or 1.6
+                            local rawH = (radiusStuds / (dist * tanHalfFov2)) * vpH
+                            if not isValidNum(rawH) then return end
+
+                            local h = math.clamp(math.floor(rawH), 12, 140)
+                            local w = math.clamp(math.floor(h * 0.9), 8, 120)
+                            local boxX = math.floor(screenPos.X - w * 0.5)
+                            local boxY = math.floor(screenPos.Y - h * 0.5)
+
+                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
+
+                            itemSlot = itemSlot + 1
+                            local e = itemPool[itemSlot]
+                            local col = isRare and rareInfo and rareInfo.color or Color3.fromRGB(0, 255, 120)
+                            local textColor = isRare and rareInfo and rareInfo.color or Color3.fromRGB(255, 255, 255)
+                            local displayName = isRare and rareInfo and rareInfo.label or it.name
+
+                            if showBox then
+                                e.box.Position = Vector2.new(boxX, boxY)
+                                e.box.Size = Vector2.new(w, h)
+                                if not e.box.Visible then
+                                    e.box.Color = col
+                                    e.box.Visible = true
+                                end
+                            elseif e.box.Visible then
+                                e.box.Visible = false
+                            end
+
+                            if showName or showDist then
+                                local label = tostring(displayName or "Item")
+                                if showDist then
+                                    label = label .. " [" .. math.floor(dist) .. "m]"
+                                end
+
+                                if e.lastText ~= label then
+                                    e.tag.Text = tostring(label)
+                                    e.lastText = label
+                                end
+                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
+
+                                if not e.tag.Visible then
+                                    e.tag.Color = textColor
+                                    e.tag.Visible = true
+                                end
+                            elseif e.tag.Visible then
+                                e.tag.Visible = false
+                            end
+
+                            if isRare and showTracers and rareInfo then
+                                e.tracer.From = Vector2.new(screenBottomX, screenBottomY)
+                                e.tracer.To = Vector2.new(screenPos.X, screenPos.Y)
+                                if not e.tracer.Visible then
+                                    e.tracer.Color = col
+                                    e.tracer.Visible = true
+                                end
+                            elseif e.tracer.Visible then
+                                e.tracer.Visible = false
+                            end
+
+                            e.isShown = true
+                        end
+                    end
+                end)
+            end
+        end
+
+        for i = itemSlot + 1, ITEM_POOL_SIZE do
+            hideItemSlot(itemPool[i])
+        end
+
+        -- ========================================================
+        -- 5. CHAKRA SENSE RADAR HUD OVERLAY
+        -- ========================================================
+        local csEnabled = getUI("bl_cs_en", true)
+        local csHudEnabled = getUI("bl_cs_hud", true)
+        local chakraList = trackedChakraUsers
+
+        if csEnabled and csHudEnabled and #chakraList > 0 then
+            local lines = {}
+            for i = 1, #chakraList do
+                local u = chakraList[i]
+                local status = u.isCasting and "[CASTING NOW!]" or "[Idle]"
+                table.insert(lines, string.format(" %s: %s", u.name, status))
+            end
+            local fullText = table.concat(lines, "\n")
+            if lastCsHudText ~= fullText then
+                csHudContent.Text = fullText
+                lastCsHudText = fullText
+            end
+            if not csHudTitle.Visible then
+                csHudTitle.Text = string.format("[Chakra Sense Radar (%d)]", #chakraList)
+                csHudTitle.Visible = true
+            end
+            if not csHudContent.Visible then
+                csHudContent.Visible = true
+            end
+        else
+            if csHudTitle.Visible then csHudTitle.Visible = false end
+            if csHudContent.Visible then csHudContent.Visible = false end
+            lastCsHudText = ""
+        end
+
+        -- ========================================================
+        -- 6. BEAST TAMER EVENT ESP & TRACER
+        -- ========================================================
+        local bt = trackedBeastTamer
+        local btEspEnabled = getUI("bl_ev_beast_esp", true)
+
+        if bt and btEspEnabled then
+            pcall(function()
+                local pos = bt.pos or (bt.root and bt.root.Position)
+                if isValidVec3(pos) then
+                    local dist = (camPos - pos).Magnitude
+                    if dist > 0.5 then
+                        local screenPos, onScreen = WorldToScreen(pos)
+                        if onScreen and isValidVec2(screenPos) then
+                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
+                            if isValidNum(rawH) then
+                                local h = math.clamp(math.floor(rawH), 16, 260)
+                                local w = math.clamp(math.floor(h * 0.5), 10, 140)
+                                local boxX = math.floor(screenPos.X - w * 0.5)
+                                local boxY = math.floor(screenPos.Y - h * 0.5)
+
+                                if isValidNum(boxX) and isValidNum(boxY) then
+                                    eventBox.Position = Vector2.new(boxX, boxY)
+                                    eventBox.Size = Vector2.new(w, h)
+                                    if not eventBox.Visible then eventBox.Visible = true end
+
+                                    local label = string.format("★ BEAST TAMER ★ [%dm]", math.floor(dist))
+                                    eventTag.Text = label
+                                    eventTag.Position = Vector2.new(screenPos.X, boxY - 18)
+                                    if not eventTag.Visible then eventTag.Visible = true end
+
+                                    eventTracer.From = Vector2.new(screenBottomX, screenBottomY)
+                                    eventTracer.To = Vector2.new(screenPos.X, screenPos.Y)
+                                    if not eventTracer.Visible then eventTracer.Visible = true end
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end
+                hideEventSlot()
+            end)
+        else
+            hideEventSlot()
+        end
+    end)
+
+    if not okGlobal then
+        _G.Bloodline_lastError = tostring(globalErr)
+        logDebug("RenderStepped FATAL error: " .. tostring(globalErr))
+        pcall(function()
+            for _, s in ipairs(mobPool) do hideMobSlot(s) end
+            for _, s in ipairs(corruptPool) do hideCorruptSlot(s) end
+            for _, s in ipairs(npcPool) do hideNPCSlot(s) end
+            for _, s in ipairs(itemPool) do hideItemSlot(s) end
+            if csHudTitle and csHudTitle.Visible then csHudTitle.Visible = false end
+            if csHudContent and csHudContent.Visible then csHudContent.Visible = false end
+            hideEventSlot()
+        end)
+    end
+end)
+
+notify("Bloodline ESP", "Two-Loop Corruption Engine Activated!", 4)
+logDebug("Bloodline ESP Two-Loop Engine running smoothly at 60 FPS!")
+print("[Bloodline] Master Two-Loop Corruption Engine active!")
