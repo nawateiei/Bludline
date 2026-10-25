@@ -1,6 +1,32 @@
 -- ============================================================
 --  "Bloodline" — Master Two-Loop Combat-Engine ESP for Matcha
 --  Built for Roblox Place ID: 10266164381 (Bloodlines)
+--
+--  STRICT ARCHITECTURE CONFORMANCE (Matcha Engine Specification):
+--  1. THE CANONICAL TWO-LOOP PATTERN:
+--     - COLLECTOR (0.35s): Traverses Workspace, resolves instances,
+--       classifications, and names ONCE. Fast despawn purging in 350ms.
+--     - RENDERER (RenderStepped): Reads ONLY .Position and .Health.
+--       ZERO tree lookups (no FindFirstChild, no GetChildren in render).
+--  2. ZERO-MUTEX TAIL CLEANUP:
+--     - Inactive Drawing slots are touched ONLY when isShown == true.
+--  3. DIRECTWRITE GLYPH CACHING + 60 FPS THROTTLING:
+--     - tag.Text is updated only when content or distance changes.
+--     - Capped at stable 60 FPS to eliminate DirectX lock contention.
+--  4. CORRUPTION POINT ESP (Dedicated Toggle):
+--     - Tracks all active game.Workspace.CorruptedPoint instances.
+--     - Distinctive purple boxes, distance tags, and "Hide Destroyed" filter.
+--  5. GRANULAR ITEM TOGGLES:
+--     - Dedicated toggles for Bells (Sealing/Training) and Seaweed!
+-- ============================================================
+
+--  SMOOTHNESS / NO-FREEZE REVISION
+--   * Workspace scan is TIME-SLICED (3 ms/frame) + negative-cached instead of one big blocking pass
+--   * Animation worker is pcall-protected (it used to die silently and freeze the tracker)
+--   * Re-running the script no longer leaves duplicate zombie loops (generation token)
+--   * Renderer: no per-frame closures, no Drawing property reads, writes only on change,
+--     UI values cached, text re-layout throttled, frame limiter fixed (was skipping frames)
+--   * Debug log is rate-limited (it used to append to disk up to 60x/second on errors)
 -- ============================================================
 
 -- Clean up any previous Bloodline instance
@@ -16,17 +42,198 @@ local RunService = game:GetService("RunService")
 local Players    = game:GetService("Players")
 local Workspace  = game:GetService("Workspace")
 
--- Persistent Debug Logger
-local function logDebug(msg)
-    pcall(function()
-        local line = string.format("[%s] %s\n", os.date("%X"), tostring(msg))
-        appendfile("bloodline_debug.txt", line)
-    end)
+-- Persistent Debug Logger (rate-limited: a repeating error can no longer hammer the disk every frame)
+local lastLogMsg, lastLogAt = "", -100
+local function writeLogLine(line)
+    appendfile("bloodline_debug.txt", line)
+end
+local function logDebug(msg, force)
+    msg = tostring(msg)
+    local now = os.clock()
+    if not force then
+        if (now - lastLogAt) < 0.5 then return end
+        if msg == lastLogMsg and (now - lastLogAt) < 5 then return end
+    end
+    lastLogMsg = msg
+    lastLogAt = now
+    pcall(writeLogLine, string.format("[%s] %s\n", os.date("%X"), msg))
 end
 
 pcall(function()
     writefile("bloodline_debug.txt", string.format("=== Bloodline Two-Loop Engine Started at %s ===\n", os.date("%Y-%m-%d %X")))
 end)
+
+-- ============================================================
+--  DYNAMIC MEMORY OFFSETS & ANIMATION ENGINE (Matcha Direct)
+-- ============================================================
+local MemoryOffsets = {
+    AnimationId                = 0x48,
+    ClassDescriptor            = 0x18,
+    ClassDescriptorToClassName = 0x8,
+    Name                       = 0x48,
+    TimePosition               = 0x80,
+    ActiveAnimations           = 0x900,
+    Animation                  = 0xA0,
+    NodeNext                   = 0x10,
+}
+
+task.spawn(function()
+    pcall(function()
+        local raw = httpget("https://offsets.imtheo.lol/Offsets.json")
+        if raw and #raw > 100 then
+            local data = game:GetService("HttpService"):JSONDecode(raw)
+            if data and data.Offsets then
+                local o = data.Offsets
+                if o.Misc and o.Misc.AnimationId then MemoryOffsets.AnimationId = o.Misc.AnimationId end
+                if o.Instance and o.Instance.ClassDescriptor then MemoryOffsets.ClassDescriptor = o.Instance.ClassDescriptor end
+                if o.Instance and o.Instance.ClassName then MemoryOffsets.ClassDescriptorToClassName = o.Instance.ClassName end
+                if o.Instance and o.Instance.Name then MemoryOffsets.Name = o.Instance.Name end
+                if o.AnimationTrack and o.AnimationTrack.TimePosition then MemoryOffsets.TimePosition = o.AnimationTrack.TimePosition end
+                if o.AnimationTrack and o.AnimationTrack.Animation then MemoryOffsets.Animation = o.AnimationTrack.Animation end
+                if o.Animator and o.Animator.ActiveAnimations then MemoryOffsets.ActiveAnimations = o.Animator.ActiveAnimations end
+                logDebug(string.format("Memory offsets synchronized dynamically! ActiveAnimations: 0x%X", MemoryOffsets.ActiveAnimations))
+            end
+        end
+    end)
+end)
+
+-- NOTE: pcall(memory_read, ...) instead of pcall(function() ... end): no closure is allocated per read.
+local function ReadPointer(address)
+    if not address or address <= 4096 then return nil end
+    local ok, value = pcall(memory_read, "uintptr", address)
+    return (ok and value and value > 4096) and value or nil
+end
+
+local function ReadString(address)
+    if not address or address <= 4096 then return nil end
+    local ok, str = pcall(memory_read, "string", address)
+    return (ok and str) and str or nil
+end
+
+local function GetClassName(instanceAddress)
+    if not instanceAddress or instanceAddress <= 4096 then return "Invalid" end
+    local descriptor = ReadPointer(instanceAddress + MemoryOffsets.ClassDescriptor)
+    if descriptor then
+        local namePtr = ReadPointer(descriptor + MemoryOffsets.ClassDescriptorToClassName)
+        return ReadString(namePtr) or "Unknown"
+    end
+    return "Error"
+end
+
+local function GetIdFromTrack(trackAddress)
+    local animPtr = ReadPointer(trackAddress + MemoryOffsets.Animation)
+    if animPtr and GetClassName(animPtr) == "Animation" then
+        local idPtr = ReadPointer(animPtr + MemoryOffsets.AnimationId)
+        local idStr = ReadString(idPtr)
+        return idStr or "Unknown ID"
+    end
+    return "N/A"
+end
+
+local IGNORED_ANIMATIONS = {
+    -- User-reported Idle, Walk, Run, and Aerial Movement Animations (Bloodlines)
+    ["118501572947760"] = true, -- Idle stance
+    ["108163577446862"] = true, -- Walk
+    ["134346364716289"] = true, -- Run
+    ["82583826438029"]  = true, -- Idle posture / breathing
+    ["113811438665267"] = true, -- Jump
+    ["83875715922044"]  = true, -- Double Jump
+    ["82539547201082"]  = true, -- Descending / Falling
+
+    -- Roblox Standard Base Locomotion & Idle Animations
+    ["180435571"]       = true, -- Default R6 Idle
+    ["180435792"]       = true, -- Default R6 Idle variation
+    ["180436148"]       = true, -- Default R6 Run
+    ["180436334"]       = true, -- Default R6 Walk
+    ["125750702"]       = true, -- Default Fall
+    ["125750759"]       = true, -- Default Jump
+    ["182393478"]       = true, -- Default Climb
+    ["129967300"]       = true, -- Default Cheer
+    ["507766388"]       = true, -- Standard R15 Idle
+    ["507767714"]       = true, -- Standard R15 Walk
+    ["507765000"]       = true, -- Standard R15 Jump
+    ["507767968"]       = true, -- Standard R15 Fall
+}
+
+-- Track info cache. Resolving an AnimationTrack's id costs ~10 memory reads; the id of a given
+-- track never changes, so we resolve it once and afterwards only re-validate with ONE read
+-- (the Animation pointer) in case the memory slot got reused by a different track.
+local trackCache = {}
+local trackCacheCount = 0
+
+local function resolveTrack(track)
+    local animPtr = ReadPointer(track + MemoryOffsets.Animation)
+    local info = trackCache[track]
+    if info and info.animPtr == animPtr then
+        return info
+    end
+
+    if trackCacheCount > 400 then
+        trackCache = {}
+        trackCacheCount = 0
+    end
+
+    info = { animPtr = animPtr, valid = false, ignored = true, animId = "N/A", numId = "N/A" }
+    if GetClassName(track) == "AnimationTrack" then
+        local animId = GetIdFromTrack(track)
+        local numId = animId:match("%d+") or animId
+        info.valid   = true
+        info.animId  = animId
+        info.numId   = numId
+        info.ignored = (IGNORED_ANIMATIONS[numId] or IGNORED_ANIMATIONS[animId]) and true or false
+    end
+
+    if not trackCache[track] then trackCacheCount = trackCacheCount + 1 end
+    trackCache[track] = info
+    return info
+end
+
+-- hum = the target's Humanoid (already known by the collector), aux = per-target cache table
+local function GetPlayingAnimationTracks(hum, aux)
+    local tracks = {}
+    if not hum then return tracks end
+
+    local animator = aux.animator
+    if not animator then
+        local now = os.clock()
+        if (now - (aux.animLookupAt or 0)) < 1 then return tracks end
+        aux.animLookupAt = now
+        animator = hum:FindFirstChildOfClass("Animator")
+        aux.animator = animator
+        if not animator then return tracks end
+    end
+
+    local animAddr = animator.Address
+    if not animAddr then
+        aux.animator = nil
+        return tracks
+    end
+
+    local listHead = ReadPointer(animAddr + MemoryOffsets.ActiveAnimations)
+    if not listHead then return tracks end
+
+    local currentNode = ReadPointer(listHead)
+    local safetyCap = 0
+
+    while currentNode and currentNode ~= 0 and currentNode ~= listHead and safetyCap < 15 do
+        safetyCap = safetyCap + 1
+        local track = ReadPointer(currentNode + MemoryOffsets.NodeNext)
+        if track then
+            local info = resolveTrack(track)
+            if info.valid and not info.ignored then
+                local okTime, timePos = pcall(memory_read, "float", track + MemoryOffsets.TimePosition)
+                tracks[#tracks + 1] = {
+                    track   = track,
+                    animId  = info.animId,
+                    numId   = info.numId,
+                    timePos = okTime and timePos or 0
+                }
+            end
+        end
+        currentNode = ReadPointer(currentNode)
+    end
+    return tracks
+end
 
 -- IEEE-754 Validation Helpers
 local function isValidNum(n)
@@ -333,6 +540,12 @@ initUI("f_bells", false)
 initUI("f_seaweed", false)
 initUI("f_gloweed", false)
 initUI("f_other", true)
+initUI("bl_anim_en", true)
+initUI("bl_anim_hud", true)
+initUI("bl_anim_self", false)
+initUI("bl_anim_players", false)
+initUI("bl_anim_tag", true)
+initUI("bl_anim_cycle_kb", Enum.KeyCode.T.Value)
 
 -- Apply requested defaults
 if UI.GetValue("bl_v6_defaults") ~= true then
@@ -344,8 +557,52 @@ if UI.GetValue("bl_v6_defaults") ~= true then
     UI.SetValue("f_seaweed", false)
     UI.SetValue("f_gloweed", false)
     UI.SetValue("f_common_fruit", true)
+    UI.SetValue("bl_anim_en", true)
+    UI.SetValue("bl_anim_hud", true)
+    UI.SetValue("bl_anim_self", false)
+    UI.SetValue("bl_anim_players", false)
+    UI.SetValue("bl_anim_tag", true)
     UI.SetValue("bl_v6_defaults", true)
 end
+
+-- ============================================================
+--  SETTINGS SNAPSHOT
+--  UI.GetValue used to be called ~50x per frame from the renderer. Now we copy every
+--  setting into the plain table S a few times per second and read S in the hot paths.
+-- ============================================================
+local S = {}
+local settingsVersion = 0
+local SETTING_DEFAULTS = {
+    {"bl_mob_en", true}, {"bl_mob_box", true}, {"bl_mob_name", true}, {"bl_mob_hp_t", true},
+    {"bl_mob_hp_b", true}, {"bl_mob_dist", true}, {"bl_mob_clean", true}, {"bl_mob_boss", false},
+    {"bl_corrupt_en", false}, {"bl_corrupt_box", true}, {"bl_corrupt_name", true},
+    {"bl_corrupt_dist", true}, {"bl_corrupt_dest", true},
+    {"bl_cs_en", true}, {"bl_cs_notify", true}, {"bl_cs_use_notify", true}, {"bl_cs_hud", true},
+    {"bl_npc_en", false}, {"bl_npc_box", false}, {"bl_npc_name", true}, {"bl_npc_dist", true},
+    {"bl_rare_notif", true}, {"bl_rare_trc", true}, {"bl_r_life", true}, {"bl_r_forg", true},
+    {"bl_r_chak", true}, {"bl_r_scrl", true}, {"bl_r_rings", true}, {"bl_r_schem", true},
+    {"bl_r_eyes", true}, {"bl_ev_beast_tamer", true}, {"bl_ev_beast_esp", false},
+    {"bl_item_en", true}, {"bl_item_box", false}, {"bl_item_name", true}, {"bl_item_dist", true},
+    {"f_common_fruit", true}, {"f_bells", false}, {"f_seaweed", false}, {"f_gloweed", false},
+    {"f_other", true},
+    {"bl_anim_en", true}, {"bl_anim_hud", true}, {"bl_anim_self", false},
+    {"bl_anim_players", false}, {"bl_anim_tag", true},
+}
+
+local function refreshSettings()
+    local changed = false
+    for i = 1, #SETTING_DEFAULTS do
+        local d = SETTING_DEFAULTS[i]
+        local v = getUI(d[1], d[2])
+        if S[d[1]] ~= v then
+            S[d[1]] = v
+            changed = true
+        end
+    end
+    if changed then settingsVersion = settingsVersion + 1 end
+    return changed
+end
+refreshSettings()
 
 UI.AddTab("Bloodline", function(tab)
     -- ================= LEFT COLUMN =================
@@ -375,6 +632,14 @@ UI.AddTab("Bloodline", function(tab)
     csSec:Toggle("bl_cs_notify", "Notify On Detected", getUI("bl_cs_notify", true), function(v) UI.SetValue("bl_cs_notify", v) end)
     csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", getUI("bl_cs_use_notify", true), function(v) UI.SetValue("bl_cs_use_notify", v) end)
     csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", getUI("bl_cs_hud", true), function(v) UI.SetValue("bl_cs_hud", v) end)
+
+    local animSec = tab:Section("Animation Tracker", "Left")
+    animSec:Toggle("bl_anim_en", "Animation Tracker Enabled", getUI("bl_anim_en", true), function(v) UI.SetValue("bl_anim_en", v) end)
+    animSec:Toggle("bl_anim_hud", "Show Screen HUD", getUI("bl_anim_hud", true), function(v) UI.SetValue("bl_anim_hud", v) end)
+    animSec:Toggle("bl_anim_self", "Track Self Animation", getUI("bl_anim_self", false), function(v) UI.SetValue("bl_anim_self", v) end)
+    animSec:Keybind("bl_anim_cycle_kb", Enum.KeyCode.T.Value, "toggle")
+    animSec:Toggle("bl_anim_players", "Target Players Instead of Mobs", getUI("bl_anim_players", false), function(v) UI.SetValue("bl_anim_players", v) end)
+    animSec:Toggle("bl_anim_tag", "Show 3D Floating Anim Tag", getUI("bl_anim_tag", true), function(v) UI.SetValue("bl_anim_tag", v) end)
 
     -- ================= RIGHT COLUMN =================
     local npcSec = tab:Section("Town & Friendly NPCs", "Right")
@@ -437,7 +702,10 @@ for i = 1, MOB_POOL_SIZE do
     local tag = Drawing.new("Text")
     tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
 
-    mobPool[i] = { box = box, barBg = barBg, bar = bar, tag = tag, isShown = false, lastText = "", lastBarColor = nil }
+    box.Color = COL_RED
+    tag.Color = Color3.fromRGB(255, 255, 255)
+    mobPool[i] = { box = box, barBg = barBg, bar = bar, tag = tag, isShown = false, lastText = "", lastBarColor = nil,
+        vis = { box = false, barBg = false, bar = false, tag = false }, c = {}, textAt = 0, owner = nil }
 end
 
 for i = 1, CORRUPT_POOL_SIZE do
@@ -447,7 +715,10 @@ for i = 1, CORRUPT_POOL_SIZE do
     local tag = Drawing.new("Text")
     tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
 
-    corruptPool[i] = { box = box, tag = tag, isShown = false, lastText = "" }
+    box.Color = COL_PURPLE
+    tag.Color = COL_PURP_TXT
+    corruptPool[i] = { box = box, tag = tag, isShown = false, lastText = "",
+        vis = { box = false, tag = false }, c = {}, textAt = 0, owner = nil }
 end
 
 for i = 1, NPC_POOL_SIZE do
@@ -457,7 +728,10 @@ for i = 1, NPC_POOL_SIZE do
     local tag = Drawing.new("Text")
     tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
 
-    npcPool[i] = { box = box, tag = tag, isShown = false, lastText = "" }
+    box.Color = Color3.fromRGB(0, 210, 255)
+    tag.Color = Color3.fromRGB(255, 255, 255)
+    npcPool[i] = { box = box, tag = tag, isShown = false, lastText = "",
+        vis = { box = false, tag = false }, c = {}, textAt = 0, owner = nil }
 end
 
 for i = 1, ITEM_POOL_SIZE do
@@ -470,7 +744,8 @@ for i = 1, ITEM_POOL_SIZE do
     local tracer = Drawing.new("Line")
     tracer.Thickness = 1.5; tracer.Visible = false
 
-    itemPool[i] = { box = box, tag = tag, tracer = tracer, isShown = false, lastText = "" }
+    itemPool[i] = { box = box, tag = tag, tracer = tracer, isShown = false, lastText = "",
+        vis = { box = false, tag = false, tracer = false }, c = {}, line = {}, textAt = 0, owner = nil }
 end
 
 local csHudTitle = Drawing.new("Text")
@@ -490,40 +765,81 @@ csHudContent.Visible = false
 csHudContent.Position = Vector2.new(16, 238)
 local lastCsHudText = ""
 
+-- Animation Tracker HUD & 3D World Tag Drawings
+local animHudTitle = Drawing.new("Text")
+animHudTitle.Size = 13
+animHudTitle.Font = Drawing.Fonts.SystemBold
+animHudTitle.Color = Color3.fromRGB(255, 215, 0)
+animHudTitle.Outline = true
+animHudTitle.Visible = false
+animHudTitle.Position = Vector2.new(16, 280)
+
+local animHudTarget = Drawing.new("Text")
+animHudTarget.Size = 12
+animHudTarget.Font = Drawing.Fonts.SystemBold
+animHudTarget.Color = Color3.fromRGB(0, 230, 255)
+animHudTarget.Outline = true
+animHudTarget.Visible = false
+animHudTarget.Position = Vector2.new(16, 298)
+
+local animHudContent = Drawing.new("Text")
+animHudContent.Size = 12
+animHudContent.Font = Drawing.Fonts.System
+animHudContent.Color = Color3.fromRGB(240, 240, 240)
+animHudContent.Outline = true
+animHudContent.Visible = false
+animHudContent.Position = Vector2.new(16, 316)
+
+local animTargetTag = Drawing.new("Text")
+animTargetTag.Size = 12
+animTargetTag.Font = Drawing.Fonts.SystemBold
+animTargetTag.Color = Color3.fromRGB(255, 230, 80)
+animTargetTag.Center = true
+animTargetTag.Outline = true
+animTargetTag.Visible = false
+
+local lastAnimHudTargetText = ""
+local lastAnimHudText = ""
+
+-- Shadow visibility flags: we never READ .Visible from a Drawing (every property read crosses
+-- the engine bridge); we remember what we last wrote and only write on change.
+local function setVis(s, key, want)
+    local vis = s.vis
+    if vis[key] ~= want then
+        s[key].Visible = want
+        vis[key] = want
+    end
+end
+
 local function hideMobSlot(s)
-    if not s then return end
+    if not s or not s.isShown then return end
     s.isShown = false
-    if s.box.Visible then s.box.Visible = false end
-    if s.barBg.Visible then s.barBg.Visible = false end
-    if s.bar.Visible then s.bar.Visible = false end
-    if s.tag.Visible then s.tag.Visible = false end
-    s.lastText = ""
-    s.lastBarColor = nil
+    setVis(s, "box", false)
+    setVis(s, "barBg", false)
+    setVis(s, "bar", false)
+    setVis(s, "tag", false)
 end
 
 local function hideCorruptSlot(s)
-    if not s then return end
+    if not s or not s.isShown then return end
     s.isShown = false
-    if s.box.Visible then s.box.Visible = false end
-    if s.tag.Visible then s.tag.Visible = false end
-    s.lastText = ""
+    setVis(s, "box", false)
+    setVis(s, "tag", false)
 end
 
 local function hideNPCSlot(s)
-    if not s then return end
+    if not s or not s.isShown then return end
     s.isShown = false
-    if s.box.Visible then s.box.Visible = false end
-    if s.tag.Visible then s.tag.Visible = false end
-    s.lastText = ""
+    setVis(s, "box", false)
+    setVis(s, "tag", false)
 end
 
 local function hideItemSlot(s)
-    if not s then return end
+    if not s or not s.isShown then return end
     s.isShown = false
-    if s.box.Visible then s.box.Visible = false end
-    if s.tag.Visible then s.tag.Visible = false end
-    if s.tracer.Visible then s.tracer.Visible = false end
-    s.lastText = ""
+    setVis(s, "box", false)
+    setVis(s, "tag", false)
+    setVis(s, "tracer", false)
 end
 
 local eventBox = Drawing.new("Square")
@@ -545,10 +861,11 @@ eventTracer.Thickness = 1.5
 eventTracer.Color = Color3.fromRGB(255, 215, 0)
 eventTracer.Visible = false
 
+local evVis = { box = false, tag = false, tracer = false }
 local function hideEventSlot()
-    if eventBox.Visible then eventBox.Visible = false end
-    if eventTag.Visible then eventTag.Visible = false end
-    if eventTracer.Visible then eventTracer.Visible = false end
+    if evVis.box then eventBox.Visible = false; evVis.box = false end
+    if evVis.tag then eventTag.Visible = false; evVis.tag = false end
+    if evVis.tracer then eventTracer.Visible = false; evVis.tracer = false end
 end
 
 _G.Bloodline_mobPool     = mobPool
@@ -557,16 +874,29 @@ _G.Bloodline_npcPool     = npcPool
 _G.Bloodline_itemPool    = itemPool
 _G.Bloodline_csHudTitle  = csHudTitle
 _G.Bloodline_csHudContent= csHudContent
+_G.Bloodline_animHudTitle   = animHudTitle
+_G.Bloodline_animHudTarget  = animHudTarget
+_G.Bloodline_animHudContent = animHudContent
+_G.Bloodline_animTargetTag  = animTargetTag
 _G.Bloodline_eventBox    = eventBox
 _G.Bloodline_eventTag    = eventTag
 _G.Bloodline_eventTracer = eventTracer
 _G.Bloodline_running     = true
+
+-- Generation token: when the script is re-executed, the OLD loops used to wake up, see
+-- Bloodline_running == true again and keep running next to the new ones (double scan cost).
+local MY_GEN = (_G.Bloodline_gen or 0) + 1
+_G.Bloodline_gen = MY_GEN
+local function alive()
+    return _G.Bloodline_running == true and _G.Bloodline_gen == MY_GEN
+end
 
 -- ============================================================
 --  GLOBAL CLEANUP
 -- ============================================================
 _G.Bloodline_cleanup = function()
     _G.Bloodline_running = false
+    _G.Bloodline_gen = (_G.Bloodline_gen or 0) + 1
 
     if _G.Bloodline_renderConn then
         pcall(function() _G.Bloodline_renderConn:Disconnect() end)
@@ -581,6 +911,31 @@ _G.Bloodline_cleanup = function()
     if _G.Bloodline_csHudContent then
         pcall(function() _G.Bloodline_csHudContent:Remove() end)
         _G.Bloodline_csHudContent = nil
+    end
+
+    if _G.Bloodline_animHudTitle then
+        pcall(function() _G.Bloodline_animHudTitle:Remove() end)
+        _G.Bloodline_animHudTitle = nil
+    end
+
+    if _G.Bloodline_animHudTarget then
+        pcall(function() _G.Bloodline_animHudTarget:Remove() end)
+        _G.Bloodline_animHudTarget = nil
+    end
+
+    if _G.Bloodline_animHudContent then
+        pcall(function() _G.Bloodline_animHudContent:Remove() end)
+        _G.Bloodline_animHudContent = nil
+    end
+
+    if _G.Bloodline_animTargetTag then
+        pcall(function() _G.Bloodline_animTargetTag:Remove() end)
+        _G.Bloodline_animTargetTag = nil
+    end
+
+    if _G.Bloodline_animInputConn then
+        pcall(function() _G.Bloodline_animInputConn:Disconnect() end)
+        _G.Bloodline_animInputConn = nil
     end
 
     if _G.Bloodline_eventBox then
@@ -631,909 +986,1357 @@ _G.Bloodline_cleanup = function()
 end
 
 -- ============================================================
---  LOOP 1: FAST 0.35s COLLECTOR
---  - Universal Pickupable Item Detection (Fruits, Bells, Seaweed)
---  - Corruption Points Scanner (game.Workspace.CorruptedPoint)
---  - Precision Mob Classifier (Excludes Town NPCs cleanly)
+--  TUNING
 -- ============================================================
-local trackedMobs          = {}
-local trackedCorrupt       = {}
-local trackedNPCs          = {}
-local trackedItems         = {}
-local notifiedItems        = {}
-local trackedChakraUsers   = {}
-local notifiedChakraUsers  = {}
-local lastChakraCastState  = {}
-local trackedBeastTamer    = nil
-local notifiedBeastTamer   = {}
+local SCAN_INTERVAL     = 0.30   -- pause between full Workspace passes (s)
+local SCAN_SLICE_BUDGET = 0.003  -- max seconds of scan work per frame before yielding
+local ANIM_INTERVAL     = 0.10   -- animation tracker refresh (s)
+local SETTINGS_POLL     = 0.10   -- how often UI toggles are re-read (s)
+local MAX_RENDER_FPS    = 90     -- renderer cap (0 = uncapped). See MIN_FRAME_TIME below.
+local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
+local NEG_TTL_BASE      = 4.0    -- how long "not interesting" objects are skipped (s) ...
+local NEG_TTL_JITTER    = 3.0    -- ... plus up to this much random jitter
+local ITEM_LIST_CAP     = 200
+
+local floor, clamp, max = math.floor, math.clamp, math.max
+
+local COL_WHITE        = Color3.fromRGB(255, 255, 255)
+local COL_ITEM_DEFAULT = Color3.fromRGB(0, 255, 120)
+
+-- ============================================================
+--  SHARED STATE
+-- ============================================================
+local trackedMobs, trackedCorrupt, trackedNPCs, trackedItems = {}, {}, {}, {}
+local trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = {}, "", "", 0
+local trackedBeastTamer = nil
+
+local notifiedItems         = {}
+local notifiedChakraUsers   = {}
+local lastChakraCastState   = {}
+local notifiedBeastTamer    = {}
+
+local animCandidates        = {}
+local animActiveTarget      = nil
+local animLockedTarget      = nil
+local animCandidateIndex    = 1
+local animLiveData          = nil
+local animAux               = {}   -- [modelAddress] = cached Animator / Settings values
+
+local drawDirty  = true            -- tells the renderer to rebuild its draw lists
+local scanEpoch  = 0               -- bumped on teleport so half-finished passes get discarded
+local lastMyPos  = Vector3.new(0, 0, 0)
+
+-- Tiny named helpers: calling pcall(namedFn, arg) allocates no closure (pcall(function() end) does).
+local function getAddr(o)   return o.Address end
+local function getPosOf(o)  return o.Position end
+local function getHealth(h) return h.Health end
+local function getValue(v)  return v.Value end
+local function getMaxHealth(h) return h.MaxHealth end
+local function readMob(m)   return m.root.Position, m.hum.Health end
+
+local function safeAddr(o)
+    local ok, a = pcall(getAddr, o)
+    if ok then return a end
+    return nil
+end
+
+local function isAliveHum(h)
+    local ok, hp = pcall(getHealth, h)
+    return ok and isValidNum(hp) and hp > 0
+end
+
+local function byDist(a, b) return a.dist < b.dist end
+local function itemLess(a, b)
+    if a.isRare ~= b.isRare then return a.isRare end
+    return a.dist < b.dist
+end
+local function capList(list, n)
+    for i = #list, n + 1, -1 do list[i] = nil end
+end
+
+-- ============================================================
+--  ANIMATION CYCLE KEY
+-- ============================================================
+local UserInputService = game:GetService("UserInputService")
+local animInputConn
+pcall(function()
+    animInputConn = UserInputService.InputBegan:Connect(function(input)
+        if not alive() then return end
+        local key = input.KeyCode
+        local cycleKey = getUI("bl_anim_cycle_kb", Enum.KeyCode.T.Value)
+        if not key or not cycleKey then return end
+        local kv = key
+        if type(key) ~= "number" then kv = key.Value end
+        if key == cycleKey or kv == cycleKey then
+            if #animCandidates > 0 then
+                animCandidateIndex = (animCandidateIndex % #animCandidates) + 1
+                local cand = animCandidates[animCandidateIndex]
+                if cand then
+                    animLockedTarget = cand
+                    notify("Animation Tracker", string.format("Locked: %s [%dm]", cand.name, math.floor(cand.dist or 0)), 2)
+                end
+            else
+                notify("Animation Tracker", "No mobs or players in range to track!", 2)
+            end
+        end
+    end)
+end)
+_G.Bloodline_animInputConn = animInputConn
+
+-- ============================================================
+--  LOOP A: ANIMATION WORKER (own thread, fully pcall-protected)
+--  The old version had no pcall: ONE error (target despawned mid-read) killed the thread
+--  silently and the tracker froze on stale data forever.
+-- ============================================================
+local function getAux(target)
+    local a = target.addr
+    if not a then
+        local t = target.auxLocal
+        if not t then t = {}; target.auxLocal = t end
+        return t
+    end
+    local aux = animAux[a]
+    if not aux then aux = {}; animAux[a] = aux end
+    return aux
+end
+
+local function animStep()
+    if not (S.bl_anim_en and (S.bl_anim_hud or S.bl_anim_tag)) then
+        animLiveData = nil
+        return
+    end
+
+    local target = animActiveTarget
+    if not (target and target.model and target.hum) then
+        animLiveData = nil
+        return
+    end
+
+    local hum = target.hum
+    local okHp, hp = pcall(getHealth, hum)
+    if not (okHp and isValidNum(hp) and hp > 0) then
+        animLiveData = nil
+        animLockedTarget = nil
+        return
+    end
+
+    local aux = getAux(target)
+
+    local okT, rawTracks = pcall(GetPlayingAnimationTracks, hum, aux)
+    if not okT then
+        aux.animator = nil
+        rawTracks = {}
+    end
+
+    local displayTracks = {}
+    for i = 1, math.min(#rawTracks, 4) do
+        local t = rawTracks[i]
+        displayTracks[i] = { id = t.numId, rawId = t.animId, time = t.timePos }
+    end
+
+    -- Settings / CurrentSkill / Blocking: look them up once per second at most, then reuse
+    if not aux.skillVal and not aux.blockVal then
+        local nowc = os.clock()
+        if (nowc - (aux.settingsAt or 0)) >= 1 then
+            aux.settingsAt = nowc
+            local settings = target.model:FindFirstChild("Settings")
+            if settings then
+                aux.skillVal = settings:FindFirstChild("CurrentSkill")
+                aux.blockVal = settings:FindFirstChild("Blocking")
+            end
+        end
+    end
+
+    local curSkill, isGuarding = "", false
+    if aux.skillVal then
+        local okV, v = pcall(getValue, aux.skillVal)
+        if okV then curSkill = tostring(v or "") else aux.skillVal = nil end
+    end
+    if aux.blockVal then
+        local okV, v = pcall(getValue, aux.blockVal)
+        if okV then isGuarding = (v == true) else aux.blockVal = nil end
+    end
+
+    local okMax, maxHp = pcall(getMaxHealth, hum)
+    animLiveData = {
+        name     = target.name,
+        hp       = hp,
+        maxHp    = (okMax and maxHp) or 100,
+        dist     = target.dist or 0,
+        tracks   = displayTracks,
+        skill    = curSkill,
+        guard    = isGuarding,
+        root     = target.root,
+        model    = target.model,
+        isSelf   = target.isSelf,
+        isLocked = (animLockedTarget ~= nil),
+    }
+end
 
 task.spawn(function()
-    while _G.Bloodline_running do
-        local okScan, scanErr = pcall(function()
-            local lp = Players.LocalPlayer
-            local lpChar = lp and lp.Character
-            local lpRoot = lpChar and (lpChar:FindFirstChild("HumanoidRootPart") or lpChar:FindFirstChild("Torso"))
-            local myPos = lpRoot and lpRoot.Position or Vector3.new(0, 0, 0)
-            local myName = lp and lp.Name or ""
-
-            local playerNames = {}
-            local pList = Players:GetPlayers()
-            for i = 1, #pList do
-                local p = pList[i]
-                if p then playerNames[tostring(p.Name or "")] = true end
-            end
-
-            local children = Workspace:GetChildren()
-            local total = #children
-            local freshMobs       = {}
-            local freshCorrupt    = {}
-            local freshNPCs       = {}
-            local freshItems      = {}
-            local liveFruitAddrs  = {}
-            local freshBeastTamer = nil
-            local liveBeastKeys   = {}
-
-            for i = 1, total do
-                local obj = children[i]
-                if not obj then continue end
-
-                local cname = obj.ClassName
-                -- Quick scenery skip
-                if cname == "Part" or cname == "WedgePart" or cname == "CornerWedgePart" or cname == "TrussPart" or cname == "Terrain" or cname == "Folder" then
-                    continue
-                end
-
-                local objName = tostring(obj.Name or "")
-                if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then continue end
-
-                -- 0. SPECIAL EVENT SCANNER: "Beast Tamer"
-                if cname == "Model" and (objName == "Beast Tamer" or string.find(string.lower(objName), "beast tamer")) then
-                    local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
-                    if root then
-                        local okP, p = pcall(function() return root.Position end)
-                        local okAddr, addr = pcall(function() return obj.Address end)
-                        local key = addr or objName
-                        if okP and isValidVec3(p) then
-                            freshBeastTamer = {
-                                model = obj,
-                                root  = root,
-                                pos   = p,
-                                key   = key
-                            }
-                            liveBeastKeys[key] = true
-                            if not notifiedBeastTamer[key] then
-                                notifiedBeastTamer[key] = true
-                                if getUI("bl_ev_beast_tamer", true) then
-                                    local d = math.floor((myPos - p).Magnitude)
-                                    notify("EVENT ALERT!", string.format("Beast Tamer has spawned! [%dm away]", d), 10)
-                                end
-                            end
-                        end
-                    end
-                    continue
-                end
-
-                -- 1. CORRUPTED POINT SCANNER (game.Workspace.CorruptedPoint)
-                if objName == "CorruptedPoint" and cname == "Model" then
-                    local dest = obj:FindFirstChild("Destroyed")
-                    local isDestroyed = dest and dest.Value == true
-                    if not (getUI("bl_corrupt_dest", true) and isDestroyed) then
-                        local main = obj:FindFirstChild("Main") or obj:FindFirstChild("InnerPool") or obj:FindFirstChildOfClass("BasePart")
-                        if main then
-                            local okP, p = pcall(function() return main.Position end)
-                            if okP and isValidVec3(p) then
-                                table.insert(freshCorrupt, {
-                                    pos = p,
-                                    isDestroyed = isDestroyed
-                                })
-                            end
-                        end
-                    end
-
-                -- 2. UNIVERSAL PICKUPABLE ITEM DETECTOR
-                -- Matches Fruits, Scrolls, Sealing Bells, Training Bells, Seaweed, and ClickDetector/PickUp items
-                elseif cname ~= "Camera" then
-                    -- Quick skip for known combat VFX parts or static jewelry props
-                    if STATIC_PROP_NAMES[objName]
-                        or COMMON_RINGS[objName]
-                        or objName == "Ring"
-                        or objName == "Gold Enclosed Ring"
-                        or objName == "Necklace"
-                        or string.find(objName, "Shock")
-                        or string.find(objName, "ThinRing")
-                        or string.find(objName, "MovingRing") then
-                        continue
-                    end
-
-                    local isRareRing = (RARE_ITEMS[objName] ~= nil and RARE_ITEMS[objName].filter == "Rings")
-
-                    local isPickupable = (KNOWN_ITEMS[objName] and not COMMON_RINGS[objName])
-                        or RARE_ITEMS[objName] ~= nil
-                        or isRareRing
-                        or string.find(objName, "Schematic")
-                        or string.find(objName, " Eyes")
-                        or obj:FindFirstChild("ItemDetector") ~= nil
-                        or obj:FindFirstChild("PickUp") ~= nil
-                        or obj:FindFirstChild("Pickupable") ~= nil
-                        or obj:FindFirstChildOfClass("ClickDetector") ~= nil
-                        or obj:FindFirstChildOfClass("ProximityPrompt") ~= nil
-
-                    if isPickupable then
-                        local isCommonRing = COMMON_RINGS[objName]
-                            or (objName:lower() == "ring")
-                            or (objName:lower() == "gold ring")
-                            or (objName:lower() == "golden ring")
-                            or (objName:lower() == "gold enclosed ring")
-                            or (objName:lower() == "common ring")
-                            or (objName:lower() == "necklace")
-
-                        if isCommonRing then
-                            continue
-                        end
-
-                        local rareInfo = RARE_ITEMS[objName]
-                        if not rareInfo then
-                            if string.find(objName, "Schematic") then
-                                rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "★ " .. objName .. " ★", filter = "Schematics" }
-                            elseif string.find(objName, " Eyes") then
-                                rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "★ " .. objName .. " ★", filter = "Eyes" }
-                            end
-                        end
-                        local okPos, pos = pcall(function()
-                            local p = obj.Position
-                            if not p and cname == "Model" then
-                                local part = obj.PrimaryPart or obj:FindFirstChild("Handle") or obj:FindFirstChildOfClass("Part") or obj:FindFirstChildOfClass("MeshPart")
-                                p = part and part.Position
-                            end
-                            return p
-                        end)
-                        local okAddr, addr = pcall(function() return obj.Address end)
-
-                        if okPos and isValidVec3(pos) then
-                            if rareInfo and okAddr and addr then
-                                liveFruitAddrs[addr] = true
-                                if not notifiedItems[addr] then
-                                    notifiedItems[addr] = true
-                                    if getUI("bl_rare_notif", true) then
-                                        local d = math.floor((myPos - pos).Magnitude)
-                                        notify("Rare Item Alert!", string.format("%s spawned near you! [%dm away]", rareInfo.label, d), 8)
-                                    end
-                                end
-                            end
-
-                            table.insert(freshItems, {
-                                item     = obj,
-                                name     = objName,
-                                pos      = pos,
-                                isRare   = (rareInfo ~= nil),
-                                rareInfo = rareInfo
-                            })
-                        end
-
-                    -- 3. Models (Combat Mobs & Town NPCs)
-                    elseif cname == "Model" and objName:sub(1, 4) ~= "Tree" and objName:sub(1, 7) ~= "Caravan" then
-                        if not playerNames[objName] and objName ~= myName then
-                            local tagObj = obj:FindFirstChild("NPC")
-                            if tagObj then
-                                local hum = obj:FindFirstChildOfClass("Humanoid")
-                                local root = obj:FindFirstChild("HumanoidRootPart")
-                                    or obj:FindFirstChild("Torso")
-                                    or obj:FindFirstChild("UpperTorso")
-
-                                if hum and root then
-                                    local okHp, hp = pcall(function() return hum.Health end)
-                                    if okHp and isValidNum(hp) and hp > 0 then
-                                        local tagVal = tostring(tagObj.Value or "")
-                                        local maxHp = hum.MaxHealth or 100
-
-                                        -- Precision Friendly vs Combat Classifier
-                                        local isKnownFriendly = (tagVal == "Dialog")
-                                            or FRIENDLY_NPCS[objName]
-                                            or (maxHp <= 100 and tagVal ~= "Combat" and not objName:find("Bandit") and not objName:find("Guard") and not objName:find("Clone"))
-
-                                        local isCombat = not isKnownFriendly and (
-                                            (tagVal == "Combat")
-                                            or (objName:find("Bandit") ~= nil)
-                                            or (objName:find("Guard") ~= nil)
-                                            or (objName:find("Manda") ~= nil)
-                                            or (objName:find("Snake") ~= nil)
-                                            or (objName:find("Rogue") ~= nil)
-                                            or (objName:find("Zetsu") ~= nil)
-                                            or (objName:find("Boss") ~= nil)
-                                            or (objName:find("Lavarossa") ~= nil)
-                                            or (objName:find("The Barbarian") ~= nil)
-                                            or (objName:find("Barbarit") ~= nil)
-                                            or (objName:find("Clone") ~= nil)
-                                            or (objName:find("Dummy") ~= nil)
-                                            or (objName:find("Instructor Clone") ~= nil)
-                                            or (objName:find("Clay Runner") ~= nil)
-                                            or (objName:find("Runner") ~= nil)
-                                            or (objName:find("Cratos") ~= nil)
-                                            or (objName:find("Tairock") ~= nil)
-                                            or (maxHp > 100)
-                                            or (hp < maxHp)
-                                        )
-
-                                        local cleanName = getUI("bl_mob_clean", true) and string.gsub(objName, "%d+$", "") or objName
-
-                                        if isCombat then
-                                            table.insert(freshMobs, {
-                                                root      = root,
-                                                hum       = hum,
-                                                name      = cleanName,
-                                                maxHp     = maxHp
-                                            })
-                                        else
-                                            table.insert(freshNPCs, {
-                                                root      = root,
-                                                name      = cleanName
-                                            })
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            for addr, _ in pairs(notifiedItems) do
-                if not liveFruitAddrs[addr] then
-                    notifiedItems[addr] = nil
-                end
-            end
-
-            trackedMobs    = freshMobs
-            trackedCorrupt = freshCorrupt
-            trackedNPCs    = freshNPCs
-            trackedItems   = freshItems
-
-            -- 4. CHAKRA SENSE SCANNER (game.ReplicatedStorage.Cooldowns)
-            local freshChakra = {}
-            if getUI("bl_cs_en", true) then
-                local cdFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
-                if cdFolder then
-                    local cdList = cdFolder:GetChildren()
-                    for i = 1, #cdList do
-                        local pFolder = cdList[i]
-                        if pFolder then
-                            local csVal = pFolder:FindFirstChild("Chakra Sense")
-                            if csVal then
-                                local pName = pFolder.Name
-                                local char = Workspace:FindFirstChild(pName)
-                                local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
-                                local isCasting = torso and (torso:FindFirstChild("ChakraSense") ~= nil) or false
-
-                                table.insert(freshChakra, {
-                                    name = pName,
-                                    isCasting = isCasting
-                                })
-
-                                -- Notify when detected in server
-                                if not notifiedChakraUsers[pName] then
-                                    notifiedChakraUsers[pName] = true
-                                    if getUI("bl_cs_notify", true) then
-                                        notify("Chakra Sense Detected!", string.format("%s has Chakra Sense in loadout!", pName), 7)
-                                    end
-                                end
-
-                                -- Notify when actively casting
-                                if isCasting then
-                                    if not lastChakraCastState[pName] then
-                                        lastChakraCastState[pName] = true
-                                        if getUI("bl_cs_use_notify", true) then
-                                            notify("CHAKRA SENSE ACTIVE!", string.format("%s is using Chakra Sense right now!", pName), 6)
-                                        end
-                                    end
-                                else
-                                    lastChakraCastState[pName] = false
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-
-            for pName, _ in pairs(notifiedChakraUsers) do
-                if not playerNames[pName] then
-                    notifiedChakraUsers[pName] = nil
-                    lastChakraCastState[pName] = nil
-                end
-            end
-
-            trackedChakraUsers = freshChakra
-
-            for key, _ in pairs(notifiedBeastTamer) do
-                if not liveBeastKeys[key] then
-                    notifiedBeastTamer[key] = nil
-                end
-            end
-            _G.Bloodline_beastTamerSpawned = (freshBeastTamer ~= nil)
-            trackedBeastTamer = freshBeastTamer
-        end)
-
-        if not okScan then
-            logDebug("Collector error: " .. tostring(scanErr))
+    while alive() do
+        local ok, err = pcall(animStep)
+        if not ok then
+            animLiveData = nil
+            logDebug("Anim step error: " .. tostring(err))
         end
-
-        task.wait(0.35)
+        task.wait(ANIM_INTERVAL)
     end
 end)
 
 -- ============================================================
---  LOOP 2: ZERO-LOOKUP 60-FPS RENDERER
+--  LOOP B: TIME-SLICED COLLECTOR
+--  - Walks Workspace in small slices (SCAN_SLICE_BUDGET per frame) instead of one giant
+--    blocking pass => no more frame-time spikes / "freezes".
+--  - Objects that are not interesting are remembered (negative cache) and skipped for a few
+--    seconds, so the expensive FindFirstChild probes are not repeated 3x per second.
+--  - Everything the renderer needs is resolved here, ONCE.
 -- ============================================================
-local lastCamPos = Vector3.new(0, 0, 0)
-local lastRenderClock = 0
-local TARGET_FRAME_TIME = 1.0 / 60.0
+local RARE_FILTER_KEY = {
+    ["Life Up Fruit"]          = "bl_r_life",
+    ["Fruit of Forgetfulness"] = "bl_r_forg",
+    ["Chakra Fruit"]           = "bl_r_chak",
+    ["Scrolls"]                = "bl_r_scrl",
+    ["Rings"]                  = "bl_r_rings",
+    ["Schematics"]             = "bl_r_schem",
+    ["Eyes"]                   = "bl_r_eyes",
+}
+local COMMON_FRUITS = {
+    ["Apple"] = true, ["Alluring Apple"] = true, ["Banana"] = true,
+    ["Orange"] = true, ["Pear"] = true, ["Mango"] = true,
+}
+local COMBAT_NAME_HINTS = {
+    "Bandit", "Guard", "Manda", "Snake", "Rogue", "Zetsu", "Boss", "Lavarossa",
+    "The Barbarian", "Barbarit", "Clone", "Dummy", "Instructor Clone", "Clay Runner",
+    "Runner", "Cratos", "Tairock",
+}
+
+-- Which UI toggle controls this item? nil = always allowed (rare item with no dedicated toggle)
+local function itemSettingKey(name, rareInfo)
+    if rareInfo then
+        return RARE_FILTER_KEY[rareInfo.filter]
+    end
+    if name:find("Bells") then return "f_bells" end
+    if name:find("Gloweed") or name:find("Glowweed") then return "f_gloweed" end
+    if name:find("Seaweed") or name:find("Weed") then return "f_seaweed" end
+    if COMMON_FRUITS[name] then return "f_common_fruit" end
+    return "f_other"
+end
+
+local function hasCombatHint(name)
+    for i = 1, #COMBAT_NAME_HINTS do
+        if string.find(name, COMBAT_NAME_HINTS[i], 1, true) then return true end
+    end
+    return false
+end
+
+local negName, negUntil = {}, {}
+local function ignoreObj(addr, name, ttl)
+    negName[addr]  = name
+    negUntil[addr] = os.clock() + ttl
+end
+local function longTTL()
+    return NEG_TTL_BASE + math.random() * NEG_TTL_JITTER
+end
+
+-- Per-pass state (assigned at the start of every pass, read by processObject)
+local P_now, P_myPos, P_myName = 0, Vector3.new(0, 0, 0), ""
+local P_playerNames, P_playerChars = {}, {}
+local P_freshAnim, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshItems = {}, {}, {}, {}, {}
+local P_liveItemAddrs, P_liveBeastKeys = {}, {}
+local P_freshBeastTamer = nil
+
+local function findItemPos(obj, cname)
+    local p = obj.Position
+    if not p and cname == "Model" then
+        local part = obj.PrimaryPart or obj:FindFirstChild("Handle") or obj:FindFirstChildOfClass("Part") or obj:FindFirstChildOfClass("MeshPart")
+        p = part and part.Position
+    end
+    return p
+end
+
+local function addWorldBoss(obj, objName, addr)
+    if not S.bl_anim_en then return end
+    local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
+    local hum = obj:FindFirstChildOfClass("Humanoid")
+    if root and hum and isAliveHum(hum) then
+        local okP, rp = pcall(getPosOf, root)
+        local d = (okP and isValidVec3(rp)) and (P_myPos - rp).Magnitude or 1e9
+        if d ~= d then d = 1e9 end
+        P_freshAnim[#P_freshAnim + 1] = {
+            name = objName, model = obj, root = root, hum = hum,
+            isBoss = true, isPlayer = false, dist = d, addr = addr,
+        }
+    end
+end
+
+-- Classifies ONE Workspace child. Called through pcall(processObject, obj) so a single
+-- bad/despawned instance can never abort the whole pass.
+local function processObject(obj)
+    local cname = obj.ClassName
+    if cname == "Part" or cname == "WedgePart" or cname == "CornerWedgePart"
+        or cname == "TrussPart" or cname == "Terrain" or cname == "Folder" or cname == "Camera" then
+        return
+    end
+
+    local objName = tostring(obj.Name or "")
+    if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then return end
+    if P_playerNames[objName] then return end   -- player characters are handled via Players
+
+    local addr = obj.Address
+    if not addr then return end
+
+    local nu = negUntil[addr]
+    if nu and nu > P_now and negName[addr] == objName then return end
+
+    local isModel = (cname == "Model")
+
+    -- 0. SPECIAL EVENT: Beast Tamer
+    if isModel and string.find(string.lower(objName), "beast tamer", 1, true) then
+        local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
+        if root then
+            local okP, p = pcall(getPosOf, root)
+            if okP and isValidVec3(p) then
+                P_freshBeastTamer = { model = obj, root = root, pos = p, key = addr }
+                P_liveBeastKeys[addr] = true
+                if not notifiedBeastTamer[addr] then
+                    notifiedBeastTamer[addr] = true
+                    if S.bl_ev_beast_tamer then
+                        notify("EVENT ALERT!", string.format("Beast Tamer has spawned! [%dm away]", floor((P_myPos - p).Magnitude)), 10)
+                    end
+                end
+            end
+        end
+        return
+    end
+
+    -- 1. CORRUPTED POINT
+    if objName == "CorruptedPoint" and isModel then
+        local dest = obj:FindFirstChild("Destroyed")
+        local isDestroyed = dest and dest.Value == true
+        if not (S.bl_corrupt_dest and isDestroyed) then
+            local main = obj:FindFirstChild("Main") or obj:FindFirstChild("InnerPool") or obj:FindFirstChildOfClass("BasePart")
+            if main then
+                local okP, p = pcall(getPosOf, main)
+                if okP and isValidVec3(p) then
+                    P_freshCorrupt[#P_freshCorrupt + 1] = {
+                        pos = p, isDestroyed = isDestroyed, dist = (P_myPos - p).Magnitude,
+                    }
+                end
+            end
+        end
+        return
+    end
+
+    -- Combat VFX / jewelry props
+    if string.find(objName, "Shock") or string.find(objName, "ThinRing") or string.find(objName, "MovingRing") then
+        ignoreObj(addr, objName, longTTL())
+        return
+    end
+
+    -- 2. UNIVERSAL PICKUPABLE ITEM DETECTOR
+    local rareInfo = RARE_ITEMS[objName]
+    local isPickupable = (KNOWN_ITEMS[objName] and not COMMON_RINGS[objName])
+        or rareInfo ~= nil
+        or string.find(objName, "Schematic") ~= nil
+        or string.find(objName, " Eyes") ~= nil
+        or obj:FindFirstChild("ItemDetector") ~= nil
+        or obj:FindFirstChild("PickUp") ~= nil
+        or obj:FindFirstChild("Pickupable") ~= nil
+        or obj:FindFirstChildOfClass("ClickDetector") ~= nil
+        or obj:FindFirstChildOfClass("ProximityPrompt") ~= nil
+
+    if isPickupable then
+        local lname = objName:lower()
+        if COMMON_RINGS[objName] or lname == "ring" or lname == "gold ring" or lname == "golden ring"
+            or lname == "gold enclosed ring" or lname == "common ring" or lname == "necklace" then
+            ignoreObj(addr, objName, longTTL())
+            return
+        end
+
+        if not rareInfo then
+            if string.find(objName, "Schematic") then
+                rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "★ " .. objName .. " ★", filter = "Schematics" }
+            elseif string.find(objName, " Eyes") then
+                rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "★ " .. objName .. " ★", filter = "Eyes" }
+            end
+        end
+
+        local okPos, pos = pcall(findItemPos, obj, cname)
+        if okPos and isValidVec3(pos) then
+            if rareInfo then
+                P_liveItemAddrs[addr] = true
+                if not notifiedItems[addr] then
+                    notifiedItems[addr] = true
+                    if S.bl_rare_notif then
+                        notify("Rare Item Alert!", string.format("%s spawned near you! [%dm away]", rareInfo.label, floor((P_myPos - pos).Magnitude)), 8)
+                    end
+                end
+            end
+            P_freshItems[#P_freshItems + 1] = {
+                name     = objName,
+                display  = rareInfo and rareInfo.label or objName,
+                pos      = pos,
+                isRare   = (rareInfo ~= nil),
+                rareInfo = rareInfo,
+                key      = itemSettingKey(objName, rareInfo),
+                dist     = (P_myPos - pos).Magnitude,
+            }
+        else
+            ignoreObj(addr, objName, 1.5)   -- position not resolvable yet, retry soon
+        end
+        return
+    end
+
+    -- 3. MODELS: combat mobs, town NPCs, world bosses
+    if not isModel or objName:sub(1, 4) == "Tree" or objName:sub(1, 7) == "Caravan" then
+        ignoreObj(addr, objName, longTTL())
+        return
+    end
+
+    local tagObj = obj:FindFirstChild("NPC")
+    if not tagObj then
+        if obj:FindFirstChild("WorldBoss") then
+            addWorldBoss(obj, objName, addr)   -- positive: re-collected every pass, never cached away
+        else
+            ignoreObj(addr, objName, longTTL())
+        end
+        return
+    end
+
+    local hum  = obj:FindFirstChildOfClass("Humanoid")
+    local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChild("UpperTorso")
+    if not (hum and root) then
+        ignoreObj(addr, objName, 1.5)
+        return
+    end
+
+    local okHp, hp = pcall(getHealth, hum)
+    if not (okHp and isValidNum(hp) and hp > 0) then
+        ignoreObj(addr, objName, 1.0)
+        return
+    end
+
+    local okR, rp = pcall(getPosOf, root)
+    if not (okR and isValidVec3(rp)) then
+        ignoreObj(addr, objName, 1.0)
+        return
+    end
+
+    local tagVal = tostring(tagObj.Value or "")
+    local maxHp  = hum.MaxHealth
+    if not isValidNum(maxHp) or maxHp <= 0 then maxHp = 100 end
+
+    local hintCombat = hasCombatHint(objName)
+    local isKnownFriendly = (tagVal == "Dialog")
+        or FRIENDLY_NPCS[objName]
+        or (maxHp <= 100 and tagVal ~= "Combat"
+            and not string.find(objName, "Bandit", 1, true)
+            and not string.find(objName, "Guard", 1, true)
+            and not string.find(objName, "Clone", 1, true))
+
+    local isCombat = not isKnownFriendly and (
+        tagVal == "Combat" or hintCombat or maxHp > 100 or hp < maxHp
+    )
+
+    local cleanName = objName
+    if S.bl_mob_clean then cleanName = string.gsub(objName, "%d+$", "") end
+
+    local d = (P_myPos - rp).Magnitude
+    if d ~= d then d = 1e9 end
+
+    if isCombat then
+        local isBossMob = (maxHp > 500) or (string.find(objName, "Knight", 1, true) ~= nil) or (string.find(objName, "Boss", 1, true) ~= nil)
+        if S.bl_anim_en then
+            P_freshAnim[#P_freshAnim + 1] = {
+                name = cleanName, model = obj, root = root, hum = hum,
+                isBoss = isBossMob, isPlayer = false, dist = d, addr = addr,
+            }
+        end
+        P_freshMobs[#P_freshMobs + 1] = { root = root, hum = hum, name = cleanName, maxHp = maxHp, dist = d }
+    else
+        P_freshNPCs[#P_freshNPCs + 1] = { root = root, name = cleanName, dist = d }
+    end
+end
+
+-- Chakra Sense scanner. Uses the character map built from Players instead of
+-- Workspace:FindFirstChild(name), which walked the ENTIRE Workspace once per player per pass.
+local cdFolderCache = nil
+local function scanChakra()
+    local fresh = {}
+    if S.bl_cs_en then
+        if not cdFolderCache then
+            cdFolderCache = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
+        end
+        local cdFolder = cdFolderCache
+        if cdFolder then
+            local cdList = cdFolder:GetChildren()
+            for i = 1, #cdList do
+                local pFolder = cdList[i]
+                local csVal = pFolder and pFolder:FindFirstChild("Chakra Sense")
+                if csVal then
+                    local pName = pFolder.Name
+                    local char = P_playerChars[pName]
+                    local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
+                    local isCasting = (torso and torso:FindFirstChild("ChakraSense") ~= nil) or false
+
+                    fresh[#fresh + 1] = { name = pName, isCasting = isCasting }
+
+                    if not notifiedChakraUsers[pName] then
+                        notifiedChakraUsers[pName] = true
+                        if S.bl_cs_notify then
+                            notify("Chakra Sense Detected!", string.format("%s has Chakra Sense in loadout!", pName), 7)
+                        end
+                    end
+
+                    if isCasting then
+                        if not lastChakraCastState[pName] then
+                            lastChakraCastState[pName] = true
+                            if S.bl_cs_use_notify then
+                                notify("CHAKRA SENSE ACTIVE!", string.format("%s is using Chakra Sense right now!", pName), 6)
+                            end
+                        end
+                    else
+                        lastChakraCastState[pName] = false
+                    end
+                end
+            end
+        end
+    end
+
+    for pName in pairs(notifiedChakraUsers) do
+        if not P_playerNames[pName] then
+            notifiedChakraUsers[pName] = nil
+            lastChakraCastState[pName] = nil
+        end
+    end
+
+    -- Build the HUD strings ONCE per pass; the renderer only compares them
+    local n = #fresh
+    local text, title = "", ""
+    if n > 0 then
+        local lines = {}
+        for i = 1, n do
+            local u = fresh[i]
+            lines[i] = string.format(" %s: %s", u.name, u.isCasting and "[CASTING NOW!]" or "[Idle]")
+        end
+        text  = table.concat(lines, "\n")
+        title = string.format("[Chakra Sense Radar (%d)]", n)
+    end
+    trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = fresh, text, title, n
+end
+
+local function runScanPass()
+    local startEpoch = scanEpoch
+    refreshSettings()
+
+    local lp = Players.LocalPlayer
+    local lpChar = lp and lp.Character
+    local lpRoot = lpChar and (lpChar:FindFirstChild("HumanoidRootPart") or lpChar:FindFirstChild("Torso"))
+    if lpRoot then
+        local okP, p = pcall(getPosOf, lpRoot)
+        if okP and isValidVec3(p) then lastMyPos = p end
+    end
+
+    P_now        = os.clock()
+    P_myPos      = lastMyPos
+    P_myName     = lp and lp.Name or ""
+    P_playerNames, P_playerChars = {}, {}
+    P_freshAnim, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshItems = {}, {}, {}, {}, {}
+    P_liveItemAddrs, P_liveBeastKeys = {}, {}
+    P_freshBeastTamer = nil
+
+    local animOn = S.bl_anim_en
+
+    -- Players (anim candidates + name filter + character map for Chakra Sense)
+    local pList = Players:GetPlayers()
+    for i = 1, #pList do
+        local p = pList[i]
+        if p then
+            local pn = tostring(p.Name or "")
+            P_playerNames[pn] = true
+            local pChar = p.Character
+            P_playerChars[pn] = pChar
+            if animOn and p ~= lp and pChar then
+                local pRoot = pChar:FindFirstChild("HumanoidRootPart") or pChar:FindFirstChild("Torso")
+                local pHum  = pChar:FindFirstChildOfClass("Humanoid")
+                if pRoot and pHum and isAliveHum(pHum) then
+                    local okR, rp = pcall(getPosOf, pRoot)
+                    if okR and isValidVec3(rp) then
+                        local d = (P_myPos - rp).Magnitude
+                        if d ~= d then d = 1e9 end
+                        P_freshAnim[#P_freshAnim + 1] = {
+                            name = pn, model = pChar, root = pRoot, hum = pHum,
+                            isBoss = false, isPlayer = true, dist = d, addr = safeAddr(pChar),
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    -- Time-sliced Workspace walk
+    local children = Workspace:GetChildren()
+    local total = #children
+    local sliceStart = os.clock()
+    for i = 1, total do
+        local obj = children[i]
+        if obj then
+            local t = os.clock()
+            P_now = t
+            local ok = pcall(processObject, obj)
+            if not ok then
+                _G.Bloodline_objErrors = (_G.Bloodline_objErrors or 0) + 1
+            end
+            if (i % 8 == 0) and (t - sliceStart) > SCAN_SLICE_BUDGET then
+                task.wait()
+                if not alive() then return end
+                sliceStart = os.clock()
+            end
+        end
+    end
+
+    -- Player teleported while we were scanning: results are for the wrong place, drop them
+    if scanEpoch ~= startEpoch then return end
+
+    -- Sort nearest-first so the small draw pools always get the CLOSEST entities (rare items first)
+    table.sort(P_freshMobs, byDist)
+    table.sort(P_freshNPCs, byDist)
+    table.sort(P_freshCorrupt, byDist)
+    table.sort(P_freshItems, itemLess)
+    table.sort(P_freshAnim, byDist)
+    capList(P_freshNPCs, NPC_POOL_SIZE)
+    capList(P_freshCorrupt, CORRUPT_POOL_SIZE)
+    capList(P_freshItems, ITEM_LIST_CAP)
+
+    -- Resolve active animation target
+    local newTarget = nil
+    if animOn then
+        if S.bl_anim_self then
+            local myHum = lpChar and lpChar:FindFirstChildOfClass("Humanoid")
+            if lpChar and lpRoot and myHum and isAliveHum(myHum) then
+                newTarget = {
+                    name = "You (" .. P_myName .. ")", model = lpChar, root = lpRoot, hum = myHum,
+                    isBoss = false, isPlayer = true, isSelf = true, dist = 0, addr = safeAddr(lpChar),
+                }
+            end
+        elseif animLockedTarget and animLockedTarget.model and animLockedTarget.hum and isAliveHum(animLockedTarget.hum) then
+            newTarget = animLockedTarget
+            local okR, rp = pcall(getPosOf, animLockedTarget.root)
+            if okR and isValidVec3(rp) then
+                animLockedTarget.dist = (P_myPos - rp).Magnitude
+            end
+        else
+            animLockedTarget = nil
+            local targetPlayers = S.bl_anim_players
+            local chosen = nil
+            for i = 1, #P_freshAnim do
+                local c = P_freshAnim[i]
+                if targetPlayers and c.isPlayer then chosen = c; break
+                elseif not targetPlayers and not c.isPlayer then chosen = c; break end
+            end
+            newTarget = chosen or P_freshAnim[1]
+        end
+    end
+
+    -- Drop per-target caches of things that no longer exist
+    local liveAddrs = {}
+    for i = 1, #P_freshAnim do
+        local a = P_freshAnim[i].addr
+        if a then liveAddrs[a] = true end
+    end
+    if newTarget and newTarget.addr then liveAddrs[newTarget.addr] = true end
+    for a in pairs(animAux) do
+        if not liveAddrs[a] then animAux[a] = nil end
+    end
+
+    -- Housekeeping for notification de-dupe tables
+    for a in pairs(notifiedItems) do
+        if not P_liveItemAddrs[a] then notifiedItems[a] = nil end
+    end
+    for k in pairs(notifiedBeastTamer) do
+        if not P_liveBeastKeys[k] then notifiedBeastTamer[k] = nil end
+    end
+    _G.Bloodline_beastTamerSpawned = (P_freshBeastTamer ~= nil)
+
+    -- Expired negative-cache entries
+    local nowc = os.clock()
+    for a, t in pairs(negUntil) do
+        if t < nowc then negUntil[a] = nil; negName[a] = nil end
+    end
+
+    -- PUBLISH (all at once, so the renderer never sees a half-updated world)
+    animCandidates    = P_freshAnim
+    animActiveTarget  = newTarget
+    trackedMobs       = P_freshMobs
+    trackedNPCs       = P_freshNPCs
+    trackedCorrupt    = P_freshCorrupt
+    trackedItems      = P_freshItems
+    trackedBeastTamer = P_freshBeastTamer
+    drawDirty         = true
+
+    local okC = pcall(scanChakra)
+    if not okC then cdFolderCache = nil end
+end
+
+task.spawn(function()
+    while alive() do
+        local ok, err = pcall(runScanPass)
+        if not ok then logDebug("Collector error: " .. tostring(err)) end
+        task.wait(SCAN_INTERVAL)
+    end
+end)
+
+-- ============================================================
+--  LOOP C: RENDERER (RenderStepped)
+--  Reads only cached data + live .Position/.Health. No tree lookups, no closures per frame,
+--  no Drawing property READS, and a Drawing is only written when its value really changed.
+-- ============================================================
+local lastCamPos        = nil
+local lastRenderClock   = 0
+local MIN_FRAME_TIME    = (MAX_RENDER_FPS and MAX_RENDER_FPS > 0) and (0.85 / MAX_RENDER_FPS) or 0
+local lastSettingsPoll  = 0
+local lastDrawSettingsVersion = -1
+
+local drawMobs, drawItems = {}, {}
+
+-- Per-frame values shared with the render helpers
+local rNow, rCamPos, rVpH, rTan, rBotX, rBotY = 0, Vector3.new(0, 0, 0), 0, 0, 0, 0
 
 _G.Bloodline_renderFrameCount = 0
 _G.Bloodline_lastError = nil
 
-_G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
-    if not _G.Bloodline_running then return end
+-- Write Position / Size / line ends only if they changed since the last write
+local function place(s, key, x, y)
+    local cache = s.c
+    local c = cache[key]
+    if not c then c = {}; cache[key] = c end
+    if c.x ~= x or c.y ~= y then
+        c.x = x; c.y = y
+        s[key].Position = Vector2.new(x, y)
+    end
+end
 
-    local now = os.clock()
-    if (now - lastRenderClock) < TARGET_FRAME_TIME then
+local function sizeIt(s, key, w, h)
+    local cache = s.c
+    local c = cache[key]
+    if not c then c = {}; cache[key] = c end
+    if c.w ~= w or c.h ~= h then
+        c.w = w; c.h = h
+        s[key].Size = Vector2.new(w, h)
+    end
+end
+
+local function setLine(s, fx, fy, tx, ty)
+    local l = s.line
+    if l.fx ~= fx or l.fy ~= fy then
+        l.fx = fx; l.fy = fy
+        s.tracer.From = Vector2.new(fx, fy)
+    end
+    if l.tx ~= tx or l.ty ~= ty then
+        l.tx = tx; l.ty = ty
+        s.tracer.To = Vector2.new(tx, ty)
+    end
+end
+
+-- Shadow visibility for the loose HUD drawings
+local hudState = {}
+local function setHud(d, want)
+    if hudState[d] ~= want then
+        d.Visible = want
+        hudState[d] = want
+    end
+end
+
+animHudTitle.Text = "[ ANIMATION TRACKER ]"
+
+local function rebuildDrawLists()
+    drawDirty = false
+    lastDrawSettingsVersion = settingsVersion
+
+    local bossOnly = S.bl_mob_boss
+    local mobs, n = {}, 0
+    for i = 1, #trackedMobs do
+        local m = trackedMobs[i]
+        if not bossOnly or m.maxHp > 500 then
+            n = n + 1
+            mobs[n] = m
+            if n >= MOB_POOL_SIZE then break end
+        end
+    end
+    drawMobs = mobs
+
+    local items, k = {}, 0
+    for i = 1, #trackedItems do
+        local it = trackedItems[i]
+        if it.key == nil or S[it.key] then
+            k = k + 1
+            items[k] = it
+            if k >= ITEM_POOL_SIZE then break end
+        end
+    end
+    drawItems = items
+end
+
+-- ---------------- COMBAT MOBS ----------------
+local function drawMobEntity(e, m)
+    local ok, rPos, hp = pcall(readMob, m)
+    if not ok or not isValidVec3(rPos) or not isValidNum(hp) or hp <= 0 then return false end
+
+    local dist = (rCamPos - rPos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local rawH = (5.5 / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 16, 450)
+    local w = clamp(floor(h * 0.55), 8, 300)
+    local boxX = floor(sp.X - floor(w * 0.5))
+    local boxY = floor(sp.Y - floor(h * 0.5))
+    local maxHp = m.maxHp
+    local hpPct = clamp(hp / maxHp, 0, 1)
+    local fillH = clamp(floor(h * hpPct), 0, h)
+
+    e.isShown = true
+
+    if S.bl_mob_box then
+        place(e, "box", boxX, boxY)
+        sizeIt(e, "box", w, h)
+        setVis(e, "box", true)
+    else
+        setVis(e, "box", false)
+    end
+
+    if S.bl_mob_hp_b then
+        local barX = boxX - 5
+        place(e, "barBg", barX, boxY)
+        sizeIt(e, "barBg", 3, h)
+        place(e, "bar", barX, boxY + (h - fillH))
+        sizeIt(e, "bar", 3, max(1, fillH))
+        local col = (hpPct > 0.5 and COL_GREEN) or (hpPct > 0.25 and COL_YELLOW) or COL_RED
+        if e.lastBarColor ~= col then
+            e.bar.Color = col
+            e.lastBarColor = col
+        end
+        setVis(e, "barBg", true)
+        setVis(e, "bar", true)
+    else
+        setVis(e, "barBg", false)
+        setVis(e, "bar", false)
+    end
+
+    local showName, showHpTxt, showDist = S.bl_mob_name, S.bl_mob_hp_t, S.bl_mob_dist
+    if showName or showHpTxt or showDist then
+        if e.owner ~= m then e.owner = m; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = showName and m.name or ""
+            if showHpTxt then label = label .. " [" .. floor(hp) .. "/" .. floor(maxHp) .. "]" end
+            if showDist then label = label .. " " .. floor(dist) .. "m" end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        place(e, "tag", floor(sp.X), boxY - 16)
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+    return true
+end
+
+local function renderMobs()
+    local count = 0
+    if S.bl_mob_en then
+        local list = drawMobs
+        count = #list
+        for i = 1, count do
+            local e = mobPool[i]
+            if not drawMobEntity(e, list[i]) then hideMobSlot(e) end
+        end
+    end
+    for i = count + 1, MOB_POOL_SIZE do hideMobSlot(mobPool[i]) end
+end
+
+-- ---------------- CORRUPTION POINTS ----------------
+local function drawCorruptEntity(e, c)
+    local pos = c.pos
+    local dist = (rCamPos - pos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, pos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local rawH = (5.5 / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 16, 450)
+    local w = clamp(floor(h * 0.7), 10, 300)
+    local boxX = floor(sp.X - floor(w * 0.5))
+    local boxY = floor(sp.Y - floor(h * 0.5))
+
+    e.isShown = true
+
+    if S.bl_corrupt_box then
+        place(e, "box", boxX, boxY)
+        sizeIt(e, "box", w, h)
+        setVis(e, "box", true)
+    else
+        setVis(e, "box", false)
+    end
+
+    local showName, showDist = S.bl_corrupt_name, S.bl_corrupt_dist
+    if showName or showDist then
+        if e.owner ~= c then e.owner = c; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = showName and "Corrupted Point" or ""
+            if showDist then label = label .. " [" .. floor(dist) .. "m]" end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        place(e, "tag", floor(sp.X), boxY - 16)
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+    return true
+end
+
+local function renderCorrupt()
+    local count = 0
+    if S.bl_corrupt_en then
+        local list = trackedCorrupt
+        count = #list
+        if count > CORRUPT_POOL_SIZE then count = CORRUPT_POOL_SIZE end
+        for i = 1, count do
+            local e = corruptPool[i]
+            if not drawCorruptEntity(e, list[i]) then hideCorruptSlot(e) end
+        end
+    end
+    for i = count + 1, CORRUPT_POOL_SIZE do hideCorruptSlot(corruptPool[i]) end
+end
+
+-- ---------------- TOWN & FRIENDLY NPCS ----------------
+local function drawNPCEntity(e, n)
+    local okP, rPos = pcall(getPosOf, n.root)
+    if not okP or not isValidVec3(rPos) then return false end
+
+    local dist = (rCamPos - rPos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local rawH = (5.5 / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 16, 450)
+    local w = clamp(floor(h * 0.55), 8, 300)
+    local boxX = floor(sp.X - floor(w * 0.5))
+    local boxY = floor(sp.Y - floor(h * 0.5))
+
+    e.isShown = true
+
+    if S.bl_npc_box then
+        place(e, "box", boxX, boxY)
+        sizeIt(e, "box", w, h)
+        setVis(e, "box", true)
+    else
+        setVis(e, "box", false)
+    end
+
+    local showName, showDist = S.bl_npc_name, S.bl_npc_dist
+    if showName or showDist then
+        if e.owner ~= n then e.owner = n; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = n.name
+            if showDist then label = label .. " [" .. floor(dist) .. "m]" end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        place(e, "tag", floor(sp.X), boxY - 16)
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+    return true
+end
+
+local function renderNPCs()
+    local count = 0
+    if S.bl_npc_en then
+        local list = trackedNPCs
+        count = #list
+        if count > NPC_POOL_SIZE then count = NPC_POOL_SIZE end
+        for i = 1, count do
+            local e = npcPool[i]
+            if not drawNPCEntity(e, list[i]) then hideNPCSlot(e) end
+        end
+    end
+    for i = count + 1, NPC_POOL_SIZE do hideNPCSlot(npcPool[i]) end
+end
+
+-- ---------------- ITEMS ----------------
+local function drawItemEntity(e, it)
+    local pos = it.pos
+    local dist = (rCamPos - pos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, pos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local isRare, rareInfo = it.isRare, it.rareInfo
+    local rawH = ((isRare and 2.4 or 1.6) / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 12, 140)
+    local w = clamp(floor(h * 0.9), 8, 120)
+    local boxX = floor(sp.X - w * 0.5)
+    local boxY = floor(sp.Y - h * 0.5)
+    local col = (isRare and rareInfo and rareInfo.color) or COL_ITEM_DEFAULT
+    local textCol = (isRare and rareInfo and rareInfo.color) or COL_WHITE
+
+    e.isShown = true
+
+    if S.bl_item_box then
+        place(e, "box", boxX, boxY)
+        sizeIt(e, "box", w, h)
+        if e.boxCol ~= col then e.box.Color = col; e.boxCol = col end
+        setVis(e, "box", true)
+    else
+        setVis(e, "box", false)
+    end
+
+    local showName, showDist = S.bl_item_name, S.bl_item_dist
+    if showName or showDist then
+        if e.owner ~= it then e.owner = it; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = it.display
+            if showDist then label = label .. " [" .. floor(dist) .. "m]" end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        if e.tagCol ~= textCol then e.tag.Color = textCol; e.tagCol = textCol end
+        place(e, "tag", floor(sp.X), boxY - 16)
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+
+    if isRare and rareInfo and S.bl_rare_trc then
+        setLine(e, rBotX, rBotY, floor(sp.X), floor(sp.Y))
+        if e.trCol ~= col then e.tracer.Color = col; e.trCol = col end
+        setVis(e, "tracer", true)
+    else
+        setVis(e, "tracer", false)
+    end
+    return true
+end
+
+local function renderItems()
+    local count = 0
+    if S.bl_item_en then
+        local list = drawItems
+        count = #list
+        for i = 1, count do
+            local e = itemPool[i]
+            if not drawItemEntity(e, list[i]) then hideItemSlot(e) end
+        end
+    end
+    for i = count + 1, ITEM_POOL_SIZE do hideItemSlot(itemPool[i]) end
+end
+
+-- ---------------- CHAKRA SENSE HUD ----------------
+local lastCsText, lastCsTitle = "", ""
+local function renderChakraHud()
+    if S.bl_cs_en and S.bl_cs_hud and trackedChakraCount > 0 then
+        if lastCsText ~= trackedChakraText then
+            csHudContent.Text = trackedChakraText
+            lastCsText = trackedChakraText
+        end
+        if lastCsTitle ~= trackedChakraTitle then
+            csHudTitle.Text = trackedChakraTitle
+            lastCsTitle = trackedChakraTitle
+        end
+        setHud(csHudTitle, true)
+        setHud(csHudContent, true)
+        return true
+    end
+    setHud(csHudTitle, false)
+    setHud(csHudContent, false)
+    return false
+end
+
+-- ---------------- BEAST TAMER EVENT ----------------
+local evTextAt, evLastText = 0, ""
+local function drawBeastTamer(bt)
+    local okP, pos = pcall(getPosOf, bt.root)
+    if not okP or not isValidVec3(pos) then pos = bt.pos end
+    if not isValidVec3(pos) then return false end
+
+    local dist = (rCamPos - pos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, pos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local rawH = (5.5 / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 16, 260)
+    local w = clamp(floor(h * 0.5), 10, 140)
+    local boxX = floor(sp.X - w * 0.5)
+    local boxY = floor(sp.Y - h * 0.5)
+
+    eventBox.Position = Vector2.new(boxX, boxY)
+    eventBox.Size = Vector2.new(w, h)
+    if not evVis.box then eventBox.Visible = true; evVis.box = true end
+
+    if rNow - evTextAt >= TEXT_INTERVAL then
+        evTextAt = rNow
+        local label = "★ BEAST TAMER ★ [" .. floor(dist) .. "m]"
+        if label ~= evLastText then
+            eventTag.Text = label
+            evLastText = label
+        end
+    end
+    eventTag.Position = Vector2.new(floor(sp.X), boxY - 18)
+    if not evVis.tag then eventTag.Visible = true; evVis.tag = true end
+
+    eventTracer.From = Vector2.new(rBotX, rBotY)
+    eventTracer.To = Vector2.new(floor(sp.X), floor(sp.Y))
+    if not evVis.tracer then eventTracer.Visible = true; evVis.tracer = true end
+    return true
+end
+
+local function renderBeastTamer()
+    local bt = trackedBeastTamer
+    if not (bt and S.bl_ev_beast_esp and drawBeastTamer(bt)) then
+        hideEventSlot()
+    end
+end
+
+-- ---------------- ANIMATION TRACKER HUD + FLOATING TAG ----------------
+local lastAnimData = nil
+local animHudTargetStr, animHudContentStr, animTagStr = "", "", ""
+local lastAnimTargetText, lastAnimContentText, lastAnimTagText = "", "", ""
+local lastHudY = -1
+
+local function rebuildAnimStrings(d)
+    local lockStatus
+    if d.isSelf then
+        lockStatus = "[SELF]"
+    elseif d.isLocked then
+        lockStatus = "[LOCKED (Press T to Cycle)]"
+    else
+        lockStatus = "[NEAREST (Press T to Lock)]"
+    end
+
+    if d.isSelf then
+        animHudTargetStr = string.format(" Target: %s [%.0f/%.0f HP] %s", d.name, d.hp, d.maxHp, lockStatus)
+    else
+        animHudTargetStr = string.format(" Target: %s [%.0f/%.0f HP] (%dm) %s", d.name, d.hp, d.maxHp, floor(d.dist), lockStatus)
+    end
+
+    local lines = {}
+    if d.skill ~= "" or d.guard then
+        lines[#lines + 1] = string.format(" Status: %s%s", (d.skill ~= "" and ("Skill: " .. d.skill .. " ") or ""), (d.guard and "[GUARDING]" or ""))
+    end
+    if #d.tracks > 0 then
+        for idx, t in ipairs(d.tracks) do
+            lines[#lines + 1] = string.format(" > Track %d: ID %s (Time: %.2fs)", idx, t.id, t.time)
+        end
+    else
+        lines[#lines + 1] = " > Idle / Moving (No combat tracks)"
+    end
+    animHudContentStr = table.concat(lines, "\n")
+
+    if #d.tracks > 0 then
+        animTagStr = string.format("[Anim: %s (%.2fs)]", d.tracks[1].id, d.tracks[1].time)
+    elseif d.skill ~= "" then
+        animTagStr = string.format("[Skill: %s]", d.skill)
+    else
+        animTagStr = ""
+    end
+end
+
+local function renderAnim(chakraShown)
+    local d = animLiveData
+    if not (S.bl_anim_en and d) then
+        setHud(animHudTitle, false)
+        setHud(animHudTarget, false)
+        setHud(animHudContent, false)
+        setHud(animTargetTag, false)
+        lastAnimData = nil
         return
     end
+
+    -- Strings are rebuilt only when the worker publishes new data (10x/s), not every frame
+    if d ~= lastAnimData then
+        lastAnimData = d
+        rebuildAnimStrings(d)
+        if S.bl_anim_hud then
+            if animHudTargetStr ~= lastAnimTargetText then
+                animHudTarget.Text = animHudTargetStr
+                lastAnimTargetText = animHudTargetStr
+            end
+            if animHudContentStr ~= lastAnimContentText then
+                animHudContent.Text = animHudContentStr
+                lastAnimContentText = animHudContentStr
+            end
+        end
+    end
+
+    if S.bl_anim_hud then
+        local hudY = chakraShown and 300 or 220
+        if hudY ~= lastHudY then
+            lastHudY = hudY
+            animHudTitle.Position   = Vector2.new(16, hudY)
+            animHudTarget.Position  = Vector2.new(16, hudY + 18)
+            animHudContent.Position = Vector2.new(16, hudY + 36)
+        end
+        -- HUD may have just been switched on: make sure the texts are current
+        if animHudTargetStr ~= lastAnimTargetText then
+            animHudTarget.Text = animHudTargetStr
+            lastAnimTargetText = animHudTargetStr
+        end
+        if animHudContentStr ~= lastAnimContentText then
+            animHudContent.Text = animHudContentStr
+            lastAnimContentText = animHudContentStr
+        end
+        setHud(animHudTitle, true)
+        setHud(animHudTarget, true)
+        setHud(animHudContent, true)
+    else
+        setHud(animHudTitle, false)
+        setHud(animHudTarget, false)
+        setHud(animHudContent, false)
+    end
+
+    local tagShown = false
+    if S.bl_anim_tag and d.root and animTagStr ~= "" then
+        local okP, rPos = pcall(getPosOf, d.root)
+        if okP and isValidVec3(rPos) then
+            local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+            if okS and onScreen and isValidVec2(sp) then
+                local dist = (rCamPos - rPos).Magnitude
+                local rawH = (5.5 / (dist * rTan)) * rVpH
+                if isValidNum(rawH) then
+                    local h = clamp(floor(rawH), 16, 450)
+                    if animTagStr ~= lastAnimTagText then
+                        animTargetTag.Text = animTagStr
+                        lastAnimTagText = animTagStr
+                    end
+                    animTargetTag.Position = Vector2.new(floor(sp.X), floor(sp.Y - floor(h * 0.5) - 32))
+                    setHud(animTargetTag, true)
+                    tagShown = true
+                end
+            end
+        end
+    end
+    if not tagShown then setHud(animTargetTag, false) end
+end
+
+-- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
+local function hideAllDrawings()
+    for i = 1, MOB_POOL_SIZE do local s = mobPool[i]; s.isShown = true; hideMobSlot(s) end
+    for i = 1, CORRUPT_POOL_SIZE do local s = corruptPool[i]; s.isShown = true; hideCorruptSlot(s) end
+    for i = 1, NPC_POOL_SIZE do local s = npcPool[i]; s.isShown = true; hideNPCSlot(s) end
+    for i = 1, ITEM_POOL_SIZE do local s = itemPool[i]; s.isShown = true; hideItemSlot(s) end
+    setHud(csHudTitle, false)
+    setHud(csHudContent, false)
+    setHud(animHudTitle, false)
+    setHud(animHudTarget, false)
+    setHud(animHudContent, false)
+    setHud(animTargetTag, false)
+    hideEventSlot()
+    lastAnimData = nil
+end
+
+local function renderFrame()
+    local cam = Workspace.CurrentCamera
+    local camPos = cam and cam.Position
+    local viewport = cam and cam.ViewportSize
+
+    -- No usable camera (loading screen / respawn / minimized): clear the screen instead of
+    -- leaving the last frame's boxes frozen on it.
+    if not (camPos and isValidVec3(camPos) and viewport and viewport.X > 20 and viewport.Y > 20) then
+        hideAllDrawings()
+        return
+    end
+
+    local tanHalfFov2 = math.tan(math.rad(cam.FieldOfView or 70) * 0.5) * 2.0
+    if not isValidNum(tanHalfFov2) or tanHalfFov2 <= 0.001 then
+        hideAllDrawings()
+        return
+    end
+
+    rCamPos = camPos
+    rVpH    = viewport.Y
+    rTan    = tanHalfFov2
+    rBotX   = floor(viewport.X * 0.5)
+    rBotY   = floor(viewport.Y)
+
+    -- Fast-travel flush (>100 studs in one frame)
+    if lastCamPos and (camPos - lastCamPos).Magnitude > 100.0 then
+        scanEpoch = scanEpoch + 1
+        trackedMobs, trackedCorrupt, trackedNPCs, trackedItems = {}, {}, {}, {}
+        drawDirty = true
+    end
+    lastCamPos = camPos
+
+    if drawDirty or lastDrawSettingsVersion ~= settingsVersion then
+        rebuildDrawLists()
+    end
+
+    renderMobs()
+    renderCorrupt()
+    renderNPCs()
+    renderItems()
+    local chakraShown = renderChakraHud()
+    renderBeastTamer()
+    renderAnim(chakraShown)
+end
+
+_G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
+    if not alive() then return end
+
+    -- Frame limiter. The old check was `dt < 1/60`, which at a real 60 Hz skipped roughly every
+    -- other frame (dt is often 16.5 ms < 16.67 ms) => the ESP updated at ~30 FPS and looked choppy.
+    -- Now: 15% tolerance and a higher cap, so it follows your display refresh rate.
+    local now = os.clock()
+    if (now - lastRenderClock) < MIN_FRAME_TIME then return end
     lastRenderClock = now
+    rNow = now
 
     _G.Bloodline_renderFrameCount = _G.Bloodline_renderFrameCount + 1
 
-    local okGlobal, globalErr = pcall(function()
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-        local camPos = cam.Position
-        if not isValidVec3(camPos) then return end
-
-        local viewport = cam.ViewportSize
-        if not viewport or viewport.X <= 20 or viewport.Y <= 20 then return end
-        local vpW = viewport.X
-        local vpH = viewport.Y
-        local screenBottomX = math.floor(vpW * 0.5)
-        local screenBottomY = math.floor(vpH)
-
-        local fovRad = math.rad(cam.FieldOfView or 70)
-        local tanHalfFov2 = math.tan(fovRad * 0.5) * 2.0
-        if not isValidNum(tanHalfFov2) or tanHalfFov2 <= 0.001 then return end
-
-        -- Fast Travel Flush (>100 studs jump in 1 frame)
-        local camDelta = (camPos - lastCamPos).Magnitude
-        if camDelta > 100.0 then
-            trackedMobs    = {}
-            trackedCorrupt = {}
-            trackedNPCs    = {}
-            trackedItems   = {}
-        end
-        lastCamPos = camPos
-
-        -- ========================================================
-        -- 1. COMBAT MOBS
-        -- ========================================================
-        local mobSlot = 0
-        local mobEnabled = getUI("bl_mob_en", true)
-
-        if mobEnabled then
-            local maxDist    = 100000
-            local showBox    = getUI("bl_mob_box", true)
-            local showHpBar  = getUI("bl_mob_hp_b", true)
-            local showName   = getUI("bl_mob_name", true)
-            local showHpTxt  = getUI("bl_mob_hp_t", true)
-            local showDist   = getUI("bl_mob_dist", true)
-            local bossOnly   = getUI("bl_mob_boss", false)
-            local boxColor   = COL_RED
-            local nameColor  = Color3.fromRGB(255, 255, 255)
-            local mobs       = trackedMobs
-
-            for i = 1, #mobs do
-                if mobSlot >= MOB_POOL_SIZE then break end
-                local m = mobs[i]
-
-                pcall(function()
-                    if bossOnly and m.maxHp <= 500 then return end
-
-                    local rPos = m.root.Position
-                    if not isValidVec3(rPos) then return end
-
-                    local dist = (camPos - rPos).Magnitude
-                    if dist <= maxDist and dist > 0.5 then
-                        local screenPos, onScreen = WorldToScreen(rPos)
-                        if onScreen and isValidVec2(screenPos) then
-                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
-                            if not isValidNum(rawH) then return end
-
-                            local h = math.clamp(math.floor(rawH), 16, 450)
-                            local w = math.clamp(math.floor(h * 0.55), 8, 300)
-                            local halfW = math.floor(w * 0.5)
-                            local halfH = math.floor(h * 0.5)
-                            local boxX = math.floor(screenPos.X - halfW)
-                            local boxY = math.floor(screenPos.Y - halfH)
-
-                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
-
-                            local hp = m.hum.Health
-                            if not isValidNum(hp) or hp <= 0 then return end
-                            local maxHp = m.maxHp
-                            local hpPct = math.clamp(hp / maxHp, 0, 1)
-                            local fillH = math.clamp(math.floor(h * hpPct), 0, h)
-
-                            mobSlot = mobSlot + 1
-                            local e = mobPool[mobSlot]
-
-                            -- Box
-                            if showBox then
-                                e.box.Position = Vector2.new(boxX, boxY)
-                                e.box.Size = Vector2.new(w, h)
-                                if not e.box.Visible then
-                                    e.box.Color = boxColor
-                                    e.box.Visible = true
-                                end
-                            elseif e.box.Visible then
-                                e.box.Visible = false
-                            end
-
-                            -- Health Bar
-                            if showHpBar then
-                                local barX = boxX - 5
-                                e.barBg.Position = Vector2.new(barX, boxY)
-                                e.barBg.Size = Vector2.new(3, h)
-
-                                e.bar.Position = Vector2.new(barX, boxY + (h - fillH))
-                                e.bar.Size = Vector2.new(3, math.max(1, fillH))
-
-                                local targetColor = (hpPct > 0.5 and COL_GREEN) or (hpPct > 0.25 and COL_YELLOW) or COL_RED
-                                if e.lastBarColor ~= targetColor then
-                                    e.bar.Color = targetColor
-                                    e.lastBarColor = targetColor
-                                end
-
-                                if not e.barBg.Visible then
-                                    e.barBg.Visible = true
-                                    e.bar.Visible = true
-                                end
-                            elseif e.barBg.Visible then
-                                e.barBg.Visible = false
-                                e.bar.Visible = false
-                            end
-
-                            -- Name / HP Text / Distance
-                            if showName or showHpTxt or showDist then
-                                local dInt = math.floor(dist)
-                                local curHp = math.floor(hp)
-                                local label = ""
-
-                                if showName then label = m.name end
-                                if showHpTxt then label = label .. " [" .. curHp .. "/" .. math.floor(maxHp) .. "]" end
-                                if showDist then label = label .. " " .. dInt .. "m" end
-
-                                if e.lastText ~= label then
-                                    e.tag.Text = tostring(label)
-                                    e.lastText = label
-                                end
-                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
-
-                                if not e.tag.Visible then
-                                    e.tag.Color = nameColor
-                                    e.tag.Visible = true
-                                end
-                            elseif e.tag.Visible then
-                                e.tag.Visible = false
-                            end
-
-                            e.isShown = true
-                        end
-                    end
-                end)
-            end
-        end
-
-        for i = mobSlot + 1, MOB_POOL_SIZE do
-            hideMobSlot(mobPool[i])
-        end
-
-        -- ========================================================
-        -- 2. CORRUPTION POINTS (game.Workspace.CorruptedPoint)
-        -- ========================================================
-        local corruptSlot = 0
-        local corruptEnabled = getUI("bl_corrupt_en", true)
-
-        if corruptEnabled then
-            local maxDist   = 100000
-            local showBox   = getUI("bl_corrupt_box", true)
-            local showName  = getUI("bl_corrupt_name", true)
-            local showDist  = getUI("bl_corrupt_dist", true)
-            local boxColor  = COL_PURPLE
-            local nameColor = COL_PURP_TXT
-            local corrupts  = trackedCorrupt
-
-            for i = 1, #corrupts do
-                if corruptSlot >= CORRUPT_POOL_SIZE then break end
-                local c = corrupts[i]
-
-                pcall(function()
-                    local pos = c.pos
-                    if not isValidVec3(pos) then return end
-
-                    local dist = (camPos - pos).Magnitude
-                    if dist <= maxDist and dist > 0.5 then
-                        local screenPos, onScreen = WorldToScreen(pos)
-                        if onScreen and isValidVec2(screenPos) then
-                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
-                            if not isValidNum(rawH) then return end
-
-                            local h = math.clamp(math.floor(rawH), 16, 450)
-                            local w = math.clamp(math.floor(h * 0.7), 10, 300)
-                            local halfW = math.floor(w * 0.5)
-                            local halfH = math.floor(h * 0.5)
-                            local boxX = math.floor(screenPos.X - halfW)
-                            local boxY = math.floor(screenPos.Y - halfH)
-
-                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
-
-                            corruptSlot = corruptSlot + 1
-                            local e = corruptPool[corruptSlot]
-
-                            if showBox then
-                                e.box.Position = Vector2.new(boxX, boxY)
-                                e.box.Size = Vector2.new(w, h)
-                                if not e.box.Visible then
-                                    e.box.Color = boxColor
-                                    e.box.Visible = true
-                                end
-                            elseif e.box.Visible then
-                                e.box.Visible = false
-                            end
-
-                            if showName or showDist then
-                                local label = ""
-                                if showName then label = "Corrupted Point" end
-                                if showDist then label = label .. " [" .. math.floor(dist) .. "m]" end
-
-                                if e.lastText ~= label then
-                                    e.tag.Text = tostring(label)
-                                    e.lastText = label
-                                end
-                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
-
-                                if not e.tag.Visible then
-                                    e.tag.Color = nameColor
-                                    e.tag.Visible = true
-                                end
-                            elseif e.tag.Visible then
-                                e.tag.Visible = false
-                            end
-
-                            e.isShown = true
-                        end
-                    end
-                end)
-            end
-        end
-
-        for i = corruptSlot + 1, CORRUPT_POOL_SIZE do
-            hideCorruptSlot(corruptPool[i])
-        end
-
-        -- ========================================================
-        -- 3. TOWN & FRIENDLY NPCS (Disabled by default)
-        -- ========================================================
-        local npcSlot = 0
-        local npcEnabled = getUI("bl_npc_en", false)
-
-        if npcEnabled then
-            local maxDist   = 100000
-            local showBox   = getUI("bl_npc_box", true)
-            local showName  = getUI("bl_npc_name", true)
-            local showDist  = getUI("bl_npc_dist", true)
-            local boxColor  = Color3.fromRGB(0, 210, 255)
-            local nameColor = Color3.fromRGB(255, 255, 255)
-            local npcs      = trackedNPCs
-
-            for i = 1, #npcs do
-                if npcSlot >= NPC_POOL_SIZE then break end
-                local n = npcs[i]
-
-                pcall(function()
-                    local rPos = n.root.Position
-                    if not isValidVec3(rPos) then return end
-
-                    local dist = (camPos - rPos).Magnitude
-                    if dist <= maxDist and dist > 0.5 then
-                        local screenPos, onScreen = WorldToScreen(rPos)
-                        if onScreen and isValidVec2(screenPos) then
-                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
-                            if not isValidNum(rawH) then return end
-
-                            local h = math.clamp(math.floor(rawH), 16, 450)
-                            local w = math.clamp(math.floor(h * 0.55), 8, 300)
-                            local halfW = math.floor(w * 0.5)
-                            local halfH = math.floor(h * 0.5)
-                            local boxX = math.floor(screenPos.X - halfW)
-                            local boxY = math.floor(screenPos.Y - halfH)
-
-                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
-
-                            npcSlot = npcSlot + 1
-                            local e = npcPool[npcSlot]
-
-                            if showBox then
-                                e.box.Position = Vector2.new(boxX, boxY)
-                                e.box.Size = Vector2.new(w, h)
-                                if not e.box.Visible then
-                                    e.box.Color = boxColor
-                                    e.box.Visible = true
-                                end
-                            elseif e.box.Visible then
-                                e.box.Visible = false
-                            end
-
-                            if showName or showDist then
-                                local label = n.name
-                                if showDist then label = label .. " [" .. math.floor(dist) .. "m]" end
-
-                                if e.lastText ~= label then
-                                    e.tag.Text = tostring(label)
-                                    e.lastText = label
-                                end
-                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
-
-                                if not e.tag.Visible then
-                                    e.tag.Color = nameColor
-                                    e.tag.Visible = true
-                                end
-                            elseif e.tag.Visible then
-                                e.tag.Visible = false
-                            end
-
-                            e.isShown = true
-                        end
-                    end
-                end)
-            end
-        end
-
-        for i = npcSlot + 1, NPC_POOL_SIZE do
-            hideNPCSlot(npcPool[i])
-        end
-
-        -- ========================================================
-        -- 4. ITEMS (Fruits, Bells, Seaweed & Drops)
-        -- ========================================================
-        local itemSlot = 0
-        local itemEnabled = getUI("bl_item_en", true)
-
-        if itemEnabled then
-            local maxDist     = 100000
-            local showBox     = getUI("bl_item_box", true)
-            local showName    = getUI("bl_item_name", true)
-            local showDist    = getUI("bl_item_dist", true)
-            local showTracers = getUI("bl_rare_trc", true)
-            local items       = trackedItems
-
-            for i = 1, #items do
-                if itemSlot >= ITEM_POOL_SIZE then break end
-                local it = items[i]
-
-                pcall(function()
-                    local isRare = it.isRare
-                    local rareInfo = it.rareInfo
-                    local name = it.name
-
-                    -- Granular Toggle Filter: Bells, Seaweed, Fruits, Drops
-                    local isAllowed = false
-                    if isRare then
-                        if rareInfo then
-                            local f = rareInfo.filter
-                            if f == "Life Up Fruit" then
-                                isAllowed = getUI("bl_r_life", true)
-                            elseif f == "Fruit of Forgetfulness" then
-                                isAllowed = getUI("bl_r_forg", true)
-                            elseif f == "Chakra Fruit" then
-                                isAllowed = getUI("bl_r_chak", true)
-                            elseif f == "Scrolls" then
-                                isAllowed = getUI("bl_r_scrl", true)
-                            elseif f == "Rings" then
-                                isAllowed = getUI("bl_r_rings", true)
-                            elseif f == "Schematics" then
-                                isAllowed = getUI("bl_r_schem", true)
-                            elseif f == "Eyes" then
-                                isAllowed = getUI("bl_r_eyes", true)
-                            else
-                                isAllowed = true
-                            end
-                        end
-                    else
-                        if name:find("Bells") then
-                            isAllowed = getUI("f_bells", false)
-                        elseif name:find("Gloweed") or name:find("Glowweed") then
-                            isAllowed = getUI("f_gloweed", false)
-                        elseif name:find("Seaweed") or name:find("Weed") then
-                            isAllowed = getUI("f_seaweed", false)
-                        elseif name == "Apple"
-                            or name == "Alluring Apple"
-                            or name == "Banana"
-                            or name == "Orange"
-                            or name == "Pear"
-                            or name == "Mango" then
-                            isAllowed = getUI("f_common_fruit", true)
-                        else
-                            isAllowed = getUI("f_other", true)
-                        end
-                    end
-                    if not isAllowed then return end
-
-                    local pos = it.pos or (it.item and it.item.Position)
-                    if not isValidVec3(pos) then return end
-
-                    local dist = (camPos - pos).Magnitude
-                    if dist <= maxDist and dist > 0.5 then
-                        local screenPos, onScreen = WorldToScreen(pos)
-                        if onScreen and isValidVec2(screenPos) then
-                            local radiusStuds = isRare and 2.4 or 1.6
-                            local rawH = (radiusStuds / (dist * tanHalfFov2)) * vpH
-                            if not isValidNum(rawH) then return end
-
-                            local h = math.clamp(math.floor(rawH), 12, 140)
-                            local w = math.clamp(math.floor(h * 0.9), 8, 120)
-                            local boxX = math.floor(screenPos.X - w * 0.5)
-                            local boxY = math.floor(screenPos.Y - h * 0.5)
-
-                            if not isValidNum(boxX) or not isValidNum(boxY) then return end
-
-                            itemSlot = itemSlot + 1
-                            local e = itemPool[itemSlot]
-                            local col = isRare and rareInfo and rareInfo.color or Color3.fromRGB(0, 255, 120)
-                            local textColor = isRare and rareInfo and rareInfo.color or Color3.fromRGB(255, 255, 255)
-                            local displayName = isRare and rareInfo and rareInfo.label or it.name
-
-                            if showBox then
-                                e.box.Position = Vector2.new(boxX, boxY)
-                                e.box.Size = Vector2.new(w, h)
-                                if not e.box.Visible then
-                                    e.box.Color = col
-                                    e.box.Visible = true
-                                end
-                            elseif e.box.Visible then
-                                e.box.Visible = false
-                            end
-
-                            if showName or showDist then
-                                local label = tostring(displayName or "Item")
-                                if showDist then
-                                    label = label .. " [" .. math.floor(dist) .. "m]"
-                                end
-
-                                if e.lastText ~= label then
-                                    e.tag.Text = tostring(label)
-                                    e.lastText = label
-                                end
-                                e.tag.Position = Vector2.new(screenPos.X, boxY - 16)
-
-                                if not e.tag.Visible then
-                                    e.tag.Color = textColor
-                                    e.tag.Visible = true
-                                end
-                            elseif e.tag.Visible then
-                                e.tag.Visible = false
-                            end
-
-                            if isRare and showTracers and rareInfo then
-                                e.tracer.From = Vector2.new(screenBottomX, screenBottomY)
-                                e.tracer.To = Vector2.new(screenPos.X, screenPos.Y)
-                                if not e.tracer.Visible then
-                                    e.tracer.Color = col
-                                    e.tracer.Visible = true
-                                end
-                            elseif e.tracer.Visible then
-                                e.tracer.Visible = false
-                            end
-
-                            e.isShown = true
-                        end
-                    end
-                end)
-            end
-        end
-
-        for i = itemSlot + 1, ITEM_POOL_SIZE do
-            hideItemSlot(itemPool[i])
-        end
-
-        -- ========================================================
-        -- 5. CHAKRA SENSE RADAR HUD OVERLAY
-        -- ========================================================
-        local csEnabled = getUI("bl_cs_en", true)
-        local csHudEnabled = getUI("bl_cs_hud", true)
-        local chakraList = trackedChakraUsers
-
-        if csEnabled and csHudEnabled and #chakraList > 0 then
-            local lines = {}
-            for i = 1, #chakraList do
-                local u = chakraList[i]
-                local status = u.isCasting and "[CASTING NOW!]" or "[Idle]"
-                table.insert(lines, string.format(" %s: %s", u.name, status))
-            end
-            local fullText = table.concat(lines, "\n")
-            if lastCsHudText ~= fullText then
-                csHudContent.Text = fullText
-                lastCsHudText = fullText
-            end
-            if not csHudTitle.Visible then
-                csHudTitle.Text = string.format("[Chakra Sense Radar (%d)]", #chakraList)
-                csHudTitle.Visible = true
-            end
-            if not csHudContent.Visible then
-                csHudContent.Visible = true
-            end
-        else
-            if csHudTitle.Visible then csHudTitle.Visible = false end
-            if csHudContent.Visible then csHudContent.Visible = false end
-            lastCsHudText = ""
-        end
-
-        -- ========================================================
-        -- 6. BEAST TAMER EVENT ESP & TRACER
-        -- ========================================================
-        local bt = trackedBeastTamer
-        local btEspEnabled = getUI("bl_ev_beast_esp", true)
-
-        if bt and btEspEnabled then
-            pcall(function()
-                local pos = bt.pos or (bt.root and bt.root.Position)
-                if isValidVec3(pos) then
-                    local dist = (camPos - pos).Magnitude
-                    if dist > 0.5 then
-                        local screenPos, onScreen = WorldToScreen(pos)
-                        if onScreen and isValidVec2(screenPos) then
-                            local rawH = (5.5 / (dist * tanHalfFov2)) * vpH
-                            if isValidNum(rawH) then
-                                local h = math.clamp(math.floor(rawH), 16, 260)
-                                local w = math.clamp(math.floor(h * 0.5), 10, 140)
-                                local boxX = math.floor(screenPos.X - w * 0.5)
-                                local boxY = math.floor(screenPos.Y - h * 0.5)
-
-                                if isValidNum(boxX) and isValidNum(boxY) then
-                                    eventBox.Position = Vector2.new(boxX, boxY)
-                                    eventBox.Size = Vector2.new(w, h)
-                                    if not eventBox.Visible then eventBox.Visible = true end
-
-                                    local label = string.format("★ BEAST TAMER ★ [%dm]", math.floor(dist))
-                                    eventTag.Text = label
-                                    eventTag.Position = Vector2.new(screenPos.X, boxY - 18)
-                                    if not eventTag.Visible then eventTag.Visible = true end
-
-                                    eventTracer.From = Vector2.new(screenBottomX, screenBottomY)
-                                    eventTracer.To = Vector2.new(screenPos.X, screenPos.Y)
-                                    if not eventTracer.Visible then eventTracer.Visible = true end
-                                    return
-                                end
-                            end
-                        end
-                    end
-                end
-                hideEventSlot()
-            end)
-        else
-            hideEventSlot()
-        end
-    end)
-
-    if not okGlobal then
-        _G.Bloodline_lastError = tostring(globalErr)
-        logDebug("RenderStepped FATAL error: " .. tostring(globalErr))
-        pcall(function()
-            for _, s in ipairs(mobPool) do hideMobSlot(s) end
-            for _, s in ipairs(corruptPool) do hideCorruptSlot(s) end
-            for _, s in ipairs(npcPool) do hideNPCSlot(s) end
-            for _, s in ipairs(itemPool) do hideItemSlot(s) end
-            if csHudTitle and csHudTitle.Visible then csHudTitle.Visible = false end
-            if csHudContent and csHudContent.Visible then csHudContent.Visible = false end
-            hideEventSlot()
-        end)
+    if now - lastSettingsPoll >= SETTINGS_POLL then
+        lastSettingsPoll = now
+        pcall(refreshSettings)
+    end
+
+    local ok, err = pcall(renderFrame)
+    if not ok then
+        _G.Bloodline_lastError = tostring(err)
+        logDebug("RenderStepped error: " .. tostring(err))
+        pcall(hideAllDrawings)
     end
 end)
 
-notify("Bloodline ESP", "Two-Loop Corruption Engine Activated!", 4)
-logDebug("Bloodline ESP Two-Loop Engine running smoothly at 60 FPS!")
-print("[Bloodline] Master Two-Loop Corruption Engine active!")
+notify("Bloodline ESP", "Smooth Two-Loop Engine Activated!", 4)
+logDebug("Bloodline ESP time-sliced engine running.", true)
+print("[Bloodline] Smooth Two-Loop Engine active!")
