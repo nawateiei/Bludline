@@ -358,6 +358,7 @@ initUI("f_gloweed", false)
 initUI("f_other", true)
 
 initUI("bl_jutsu_tag", true)
+initUI("bl_jutsu_size", 13)
 initUI("bl_jutsu_self", false)
 initUI("bl_jutsu_mobs", false)
 initUI("bl_jutsu_cd", true)
@@ -400,7 +401,7 @@ local SETTING_DEFAULTS = {
     {"bl_item_en", true}, {"bl_item_box", false}, {"bl_item_name", true}, {"bl_item_dist", true},
     {"f_common_fruit", true}, {"f_bells", false}, {"f_seaweed", false}, {"f_gloweed", false},
     {"f_other", true},
-    {"bl_jutsu_tag", true}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
+    {"bl_jutsu_tag", true}, {"bl_jutsu_size", 13}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
 }
 
 local function refreshSettings()
@@ -456,6 +457,7 @@ UI.AddTab("Bloodline", function(tab)
 
     local csSec = tab:Section("Chakra Sense Radar", "Left")
     csSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", getUI("bl_jutsu_tag", true), function(v) UI.SetValue("bl_jutsu_tag", v) end)
+    csSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val) UI.SetValue("bl_jutsu_size", val) end)
     csSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", getUI("bl_jutsu_self", false), function(v) UI.SetValue("bl_jutsu_self", v) end)
     csSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", getUI("bl_jutsu_mobs", false), function(v) UI.SetValue("bl_jutsu_mobs", v) end)
     csSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (heavier, catches instant casts)", getUI("bl_jutsu_cd", true), function(v) UI.SetValue("bl_jutsu_cd", v) end)
@@ -631,7 +633,7 @@ for i = 1, 16 do
     tag.Outline = true
     tag.Color = Color3.fromRGB(255, 210, 50)
     tag.Visible = false
-    JutsuRadar.tags[i] = { tag = tag, vis = false, text = "", x = nil, y = nil }
+    JutsuRadar.tags[i] = { tag = tag, vis = false, text = "", size = 13, x = nil, y = nil }
 end
 _G.Bloodline_JutsuRadar = JutsuRadar
 
@@ -2571,6 +2573,11 @@ local function renderJutsuTags()
                                 end
                                 local tagCol = getJutsuColor(cast.skill)
                                 if t.tag.Color ~= tagCol then t.tag.Color = tagCol end
+                                local tagSize = S.bl_jutsu_size or 13
+                                if t.size ~= tagSize then
+                                    t.tag.Size = tagSize
+                                    t.size = tagSize
+                                end
                                 local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - 20)
                                 if t.x ~= x or t.y ~= y then
                                     t.x = x; t.y = y
