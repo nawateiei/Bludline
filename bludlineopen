@@ -2,31 +2,10 @@
 --  "Bloodline" — Master Two-Loop Combat-Engine ESP for Matcha
 --  Built for Roblox Place ID: 10266164381 (Bloodlines)
 --
---  STRICT ARCHITECTURE CONFORMANCE (Matcha Engine Specification):
---  1. THE CANONICAL TWO-LOOP PATTERN:
---     - COLLECTOR (0.35s): Traverses Workspace, resolves instances,
---       classifications, and names ONCE. Fast despawn purging in 350ms.
---     - RENDERER (RenderStepped): Reads ONLY .Position and .Health.
---       ZERO tree lookups (no FindFirstChild, no GetChildren in render).
---  2. ZERO-MUTEX TAIL CLEANUP:
---     - Inactive Drawing slots are touched ONLY when isShown == true.
---  3. DIRECTWRITE GLYPH CACHING + 60 FPS THROTTLING:
---     - tag.Text is updated only when content or distance changes.
---     - Capped at stable 60 FPS to eliminate DirectX lock contention.
---  4. CORRUPTION POINT ESP (Dedicated Toggle):
---     - Tracks all active game.Workspace.CorruptedPoint instances.
---     - Distinctive purple boxes, distance tags, and "Hide Destroyed" filter.
---  5. GRANULAR ITEM TOGGLES:
---     - Dedicated toggles for Bells (Sealing/Training) and Seaweed!
--- ============================================================
-
---  SMOOTHNESS / NO-FREEZE REVISION
---   * Workspace scan is TIME-SLICED (3 ms/frame) + negative-cached instead of one big blocking pass
---   * Animation worker is pcall-protected (it used to die silently and freeze the tracker)
---   * Re-running the script no longer leaves duplicate zombie loops (generation token)
---   * Renderer: no per-frame closures, no Drawing property reads, writes only on change,
---     UI values cached, text re-layout throttled, frame limiter fixed (was skipping frames)
---   * Debug log is rate-limited (it used to append to disk up to 60x/second on errors)
+--  MERGED BUILD:
+--   * Animation Tracker removed completely (no memory reads, no offsets download, no T keybind).
+--   * Jutsu-above-head added as its OWN low-frequency thread (see JUTSU DETECTOR).
+--   * Renderer cap 90 FPS.
 -- ============================================================
 
 -- Clean up any previous Bloodline instance
@@ -42,7 +21,7 @@ local RunService = game:GetService("RunService")
 local Players    = game:GetService("Players")
 local Workspace  = game:GetService("Workspace")
 
--- Persistent Debug Logger (rate-limited: a repeating error can no longer hammer the disk every frame)
+-- Persistent Debug Logger (rate-limited)
 local lastLogMsg, lastLogAt = "", -100
 local function writeLogLine(line)
     appendfile("bloodline_debug.txt", line)
@@ -62,178 +41,6 @@ end
 pcall(function()
     writefile("bloodline_debug.txt", string.format("=== Bloodline Two-Loop Engine Started at %s ===\n", os.date("%Y-%m-%d %X")))
 end)
-
--- ============================================================
---  DYNAMIC MEMORY OFFSETS & ANIMATION ENGINE (Matcha Direct)
--- ============================================================
-local MemoryOffsets = {
-    AnimationId                = 0x48,
-    ClassDescriptor            = 0x18,
-    ClassDescriptorToClassName = 0x8,
-    Name                       = 0x48,
-    TimePosition               = 0x80,
-    ActiveAnimations           = 0x900,
-    Animation                  = 0xA0,
-    NodeNext                   = 0x10,
-}
-
-task.spawn(function()
-    pcall(function()
-        local raw = httpget("https://offsets.imtheo.lol/Offsets.json")
-        if raw and #raw > 100 then
-            local data = game:GetService("HttpService"):JSONDecode(raw)
-            if data and data.Offsets then
-                local o = data.Offsets
-                if o.Misc and o.Misc.AnimationId then MemoryOffsets.AnimationId = o.Misc.AnimationId end
-                if o.Instance and o.Instance.ClassDescriptor then MemoryOffsets.ClassDescriptor = o.Instance.ClassDescriptor end
-                if o.Instance and o.Instance.ClassName then MemoryOffsets.ClassDescriptorToClassName = o.Instance.ClassName end
-                if o.Instance and o.Instance.Name then MemoryOffsets.Name = o.Instance.Name end
-                if o.AnimationTrack and o.AnimationTrack.TimePosition then MemoryOffsets.TimePosition = o.AnimationTrack.TimePosition end
-                if o.AnimationTrack and o.AnimationTrack.Animation then MemoryOffsets.Animation = o.AnimationTrack.Animation end
-                if o.Animator and o.Animator.ActiveAnimations then MemoryOffsets.ActiveAnimations = o.Animator.ActiveAnimations end
-                logDebug(string.format("Memory offsets synchronized dynamically! ActiveAnimations: 0x%X", MemoryOffsets.ActiveAnimations))
-            end
-        end
-    end)
-end)
-
--- NOTE: pcall(memory_read, ...) instead of pcall(function() ... end): no closure is allocated per read.
-local function ReadPointer(address)
-    if not address or address <= 4096 then return nil end
-    local ok, value = pcall(memory_read, "uintptr", address)
-    return (ok and value and value > 4096) and value or nil
-end
-
-local function ReadString(address)
-    if not address or address <= 4096 then return nil end
-    local ok, str = pcall(memory_read, "string", address)
-    return (ok and str) and str or nil
-end
-
-local function GetClassName(instanceAddress)
-    if not instanceAddress or instanceAddress <= 4096 then return "Invalid" end
-    local descriptor = ReadPointer(instanceAddress + MemoryOffsets.ClassDescriptor)
-    if descriptor then
-        local namePtr = ReadPointer(descriptor + MemoryOffsets.ClassDescriptorToClassName)
-        return ReadString(namePtr) or "Unknown"
-    end
-    return "Error"
-end
-
-local function GetIdFromTrack(trackAddress)
-    local animPtr = ReadPointer(trackAddress + MemoryOffsets.Animation)
-    if animPtr and GetClassName(animPtr) == "Animation" then
-        local idPtr = ReadPointer(animPtr + MemoryOffsets.AnimationId)
-        local idStr = ReadString(idPtr)
-        return idStr or "Unknown ID"
-    end
-    return "N/A"
-end
-
-local IGNORED_ANIMATIONS = {
-    -- User-reported Idle, Walk, Run, and Aerial Movement Animations (Bloodlines)
-    ["118501572947760"] = true, -- Idle stance
-    ["108163577446862"] = true, -- Walk
-    ["134346364716289"] = true, -- Run
-    ["82583826438029"]  = true, -- Idle posture / breathing
-    ["113811438665267"] = true, -- Jump
-    ["83875715922044"]  = true, -- Double Jump
-    ["82539547201082"]  = true, -- Descending / Falling
-
-    -- Roblox Standard Base Locomotion & Idle Animations
-    ["180435571"]       = true, -- Default R6 Idle
-    ["180435792"]       = true, -- Default R6 Idle variation
-    ["180436148"]       = true, -- Default R6 Run
-    ["180436334"]       = true, -- Default R6 Walk
-    ["125750702"]       = true, -- Default Fall
-    ["125750759"]       = true, -- Default Jump
-    ["182393478"]       = true, -- Default Climb
-    ["129967300"]       = true, -- Default Cheer
-    ["507766388"]       = true, -- Standard R15 Idle
-    ["507767714"]       = true, -- Standard R15 Walk
-    ["507765000"]       = true, -- Standard R15 Jump
-    ["507767968"]       = true, -- Standard R15 Fall
-}
-
--- Track info cache. Resolving an AnimationTrack's id costs ~10 memory reads; the id of a given
--- track never changes, so we resolve it once and afterwards only re-validate with ONE read
--- (the Animation pointer) in case the memory slot got reused by a different track.
-local trackCache = {}
-local trackCacheCount = 0
-
-local function resolveTrack(track)
-    local animPtr = ReadPointer(track + MemoryOffsets.Animation)
-    local info = trackCache[track]
-    if info and info.animPtr == animPtr then
-        return info
-    end
-
-    if trackCacheCount > 400 then
-        trackCache = {}
-        trackCacheCount = 0
-    end
-
-    info = { animPtr = animPtr, valid = false, ignored = true, animId = "N/A", numId = "N/A" }
-    if GetClassName(track) == "AnimationTrack" then
-        local animId = GetIdFromTrack(track)
-        local numId = animId:match("%d+") or animId
-        info.valid   = true
-        info.animId  = animId
-        info.numId   = numId
-        info.ignored = (IGNORED_ANIMATIONS[numId] or IGNORED_ANIMATIONS[animId]) and true or false
-    end
-
-    if not trackCache[track] then trackCacheCount = trackCacheCount + 1 end
-    trackCache[track] = info
-    return info
-end
-
--- hum = the target's Humanoid (already known by the collector), aux = per-target cache table
-local function GetPlayingAnimationTracks(hum, aux)
-    local tracks = {}
-    if not hum then return tracks end
-
-    local animator = aux.animator
-    if not animator then
-        local now = os.clock()
-        if (now - (aux.animLookupAt or 0)) < 1 then return tracks end
-        aux.animLookupAt = now
-        animator = hum:FindFirstChildOfClass("Animator")
-        aux.animator = animator
-        if not animator then return tracks end
-    end
-
-    local animAddr = animator.Address
-    if not animAddr then
-        aux.animator = nil
-        return tracks
-    end
-
-    local listHead = ReadPointer(animAddr + MemoryOffsets.ActiveAnimations)
-    if not listHead then return tracks end
-
-    local currentNode = ReadPointer(listHead)
-    local safetyCap = 0
-
-    while currentNode and currentNode ~= 0 and currentNode ~= listHead and safetyCap < 15 do
-        safetyCap = safetyCap + 1
-        local track = ReadPointer(currentNode + MemoryOffsets.NodeNext)
-        if track then
-            local info = resolveTrack(track)
-            if info.valid and not info.ignored then
-                local okTime, timePos = pcall(memory_read, "float", track + MemoryOffsets.TimePosition)
-                tracks[#tracks + 1] = {
-                    track   = track,
-                    animId  = info.animId,
-                    numId   = info.numId,
-                    timePos = okTime and timePos or 0
-                }
-            end
-        end
-        currentNode = ReadPointer(currentNode)
-    end
-    return tracks
-end
 
 -- IEEE-754 Validation Helpers
 local function isValidNum(n)
@@ -404,8 +211,9 @@ local STATIC_PROP_NAMES = {
     ["Wall"]                  = true,
     ["Floor"]                 = true,
     ["Building"]              = true,
-    ["Debris"]                = true,
     ["Locations"]             = true,
+    ["Rifts"]                 = true,
+    ["Unstable Rift"]         = true,
     ["Ramen Shop"]            = true,
     ["SpawnLocation"]         = true,
     ["ClothingModel"]         = true,
@@ -430,6 +238,7 @@ local STATIC_PROP_NAMES = {
     ["Golden Ring"]           = true,
     ["Gold Enclosed Ring"]    = true,
     ["Necklace"]              = true,
+    ["PumpkinProps"]          = true,
 }
 
 -- Known Friendly Town NPCs (Excluded from Combat Mobs ESP)
@@ -475,7 +284,6 @@ local FRIENDLY_NPCS = {
 
 -- ============================================================
 --  DYNAMIC MATCHA UI STATE MANAGEMENT
---  Reads directly from UI.GetValue to respond instantly to toggles
 -- ============================================================
 local function getUI(key, default)
     local v = UI.GetValue(key)
@@ -494,8 +302,6 @@ end
 -- Initialize default settings only if not already set (preserves user settings)
 initUI("bl_mob_en", true)
 initUI("bl_mob_box", true)
-initUI("bl_mob_en", true)
-initUI("bl_mob_box", true)
 initUI("bl_mob_name", true)
 initUI("bl_mob_hp_t", true)
 initUI("bl_mob_hp_b", true)
@@ -503,11 +309,21 @@ initUI("bl_mob_dist", true)
 initUI("bl_mob_clean", true)
 initUI("bl_mob_boss", false)
 
-initUI("bl_corrupt_en", false)
+initUI("bl_corrupt_en", true)
 initUI("bl_corrupt_box", true)
 initUI("bl_corrupt_name", true)
+initUI("bl_corrupt_hp", true)
+initUI("bl_corrupt_progress", true)
 initUI("bl_corrupt_dist", true)
 initUI("bl_corrupt_dest", true)
+initUI("bl_ev_pumpkin", true)
+
+initUI("bl_rift_en", true)
+initUI("bl_rift_box", true)
+initUI("bl_rift_name", true)
+initUI("bl_rift_dist", true)
+initUI("bl_rift_trc", false)
+initUI("bl_rift_notify", true)
 
 initUI("bl_cs_en", true)
 initUI("bl_cs_notify", true)
@@ -540,16 +356,19 @@ initUI("f_bells", false)
 initUI("f_seaweed", false)
 initUI("f_gloweed", false)
 initUI("f_other", true)
-initUI("bl_anim_en", true)
-initUI("bl_anim_hud", true)
-initUI("bl_anim_self", false)
-initUI("bl_anim_players", false)
-initUI("bl_anim_tag", true)
-initUI("bl_anim_cycle_kb", Enum.KeyCode.T.Value)
+
+initUI("bl_jutsu_tag", true)
+initUI("bl_jutsu_self", false)
+initUI("bl_jutsu_mobs", false)
+initUI("bl_jutsu_cd", true)
 
 -- Apply requested defaults
-if UI.GetValue("bl_v6_defaults") ~= true then
-    UI.SetValue("bl_corrupt_en", false)
+if UI.GetValue("bl_v8_defaults") ~= true then
+    UI.SetValue("bl_corrupt_en", true)
+    UI.SetValue("bl_corrupt_progress", true)
+    UI.SetValue("bl_rift_trc", false)
+    UI.SetValue("bl_jutsu_mobs", false)
+    UI.SetValue("bl_jutsu_self", false)
     UI.SetValue("bl_npc_box", false)
     UI.SetValue("bl_item_box", false)
     UI.SetValue("bl_ev_beast_esp", false)
@@ -557,26 +376,22 @@ if UI.GetValue("bl_v6_defaults") ~= true then
     UI.SetValue("f_seaweed", false)
     UI.SetValue("f_gloweed", false)
     UI.SetValue("f_common_fruit", true)
-    UI.SetValue("bl_anim_en", true)
-    UI.SetValue("bl_anim_hud", true)
-    UI.SetValue("bl_anim_self", false)
-    UI.SetValue("bl_anim_players", false)
-    UI.SetValue("bl_anim_tag", true)
-    UI.SetValue("bl_v6_defaults", true)
+    UI.SetValue("bl_v8_defaults", true)
 end
 
 -- ============================================================
 --  SETTINGS SNAPSHOT
---  UI.GetValue used to be called ~50x per frame from the renderer. Now we copy every
---  setting into the plain table S a few times per second and read S in the hot paths.
+--  Every setting is copied into the plain table S a few times per second; hot paths read S.
 -- ============================================================
 local S = {}
 local settingsVersion = 0
 local SETTING_DEFAULTS = {
     {"bl_mob_en", true}, {"bl_mob_box", true}, {"bl_mob_name", true}, {"bl_mob_hp_t", true},
     {"bl_mob_hp_b", true}, {"bl_mob_dist", true}, {"bl_mob_clean", true}, {"bl_mob_boss", false},
-    {"bl_corrupt_en", false}, {"bl_corrupt_box", true}, {"bl_corrupt_name", true},
-    {"bl_corrupt_dist", true}, {"bl_corrupt_dest", true},
+    {"bl_corrupt_en", true}, {"bl_corrupt_box", true}, {"bl_corrupt_name", true},
+    {"bl_corrupt_hp", true}, {"bl_corrupt_progress", true}, {"bl_corrupt_dist", true}, {"bl_corrupt_dest", true}, {"bl_ev_pumpkin", true},
+    {"bl_rift_en", true}, {"bl_rift_box", true}, {"bl_rift_name", true},
+    {"bl_rift_dist", true}, {"bl_rift_trc", false}, {"bl_rift_notify", true},
     {"bl_cs_en", true}, {"bl_cs_notify", true}, {"bl_cs_use_notify", true}, {"bl_cs_hud", true},
     {"bl_npc_en", false}, {"bl_npc_box", false}, {"bl_npc_name", true}, {"bl_npc_dist", true},
     {"bl_rare_notif", true}, {"bl_rare_trc", true}, {"bl_r_life", true}, {"bl_r_forg", true},
@@ -585,8 +400,7 @@ local SETTING_DEFAULTS = {
     {"bl_item_en", true}, {"bl_item_box", false}, {"bl_item_name", true}, {"bl_item_dist", true},
     {"f_common_fruit", true}, {"f_bells", false}, {"f_seaweed", false}, {"f_gloweed", false},
     {"f_other", true},
-    {"bl_anim_en", true}, {"bl_anim_hud", true}, {"bl_anim_self", false},
-    {"bl_anim_players", false}, {"bl_anim_tag", true},
+    {"bl_jutsu_tag", true}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
 }
 
 local function refreshSettings()
@@ -619,27 +433,36 @@ UI.AddTab("Bloodline", function(tab)
     mobSec:Toggle("bl_mob_boss", "Bosses Only (>500 HP)", getUI("bl_mob_boss", false), function(v) UI.SetValue("bl_mob_boss", v) end)
 
     local corruptSec = tab:Section("Corruption Points", "Left")
-    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", getUI("bl_corrupt_en", false), function(v) UI.SetValue("bl_corrupt_en", v) end)
+    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", getUI("bl_corrupt_en", true), function(v) UI.SetValue("bl_corrupt_en", v) end)
     corruptSec:Keybind("bl_corrupt_kb", 0, "toggle")
     corruptSec:Toggle("bl_corrupt_box", "Show Boxes", getUI("bl_corrupt_box", true), function(v) UI.SetValue("bl_corrupt_box", v) end)
     corruptSec:ColorPicker("bl_corrupt_col", 0.68, 0.17, 1.0, 1, function() end)
     corruptSec:Toggle("bl_corrupt_name", "Show Name", getUI("bl_corrupt_name", true), function(v) UI.SetValue("bl_corrupt_name", v) end)
+    corruptSec:Toggle("bl_corrupt_hp", "Show HP / Progress", getUI("bl_corrupt_hp", true), function(v) UI.SetValue("bl_corrupt_hp", v) end)
+    corruptSec:Toggle("bl_corrupt_progress", "Show as Progress % (0-100%)", getUI("bl_corrupt_progress", true), function(v) UI.SetValue("bl_corrupt_progress", v) end)
     corruptSec:Toggle("bl_corrupt_dist", "Show Distance", getUI("bl_corrupt_dist", true), function(v) UI.SetValue("bl_corrupt_dist", v) end)
     corruptSec:Toggle("bl_corrupt_dest", "Hide If Destroyed", getUI("bl_corrupt_dest", true), function(v) UI.SetValue("bl_corrupt_dest", v) end)
+    corruptSec:Toggle("bl_ev_pumpkin", "Pumpkin Point Notify", getUI("bl_ev_pumpkin", true), function(v) UI.SetValue("bl_ev_pumpkin", v) end)
+
+    local riftSec = tab:Section("Event Rifts & Portals", "Left")
+    riftSec:Toggle("bl_rift_en", "Event Portals / Rifts Enabled", getUI("bl_rift_en", true), function(v) UI.SetValue("bl_rift_en", v) end)
+    riftSec:Keybind("bl_rift_kb", 0, "toggle")
+    riftSec:Toggle("bl_rift_box", "Show Boxes", getUI("bl_rift_box", true), function(v) UI.SetValue("bl_rift_box", v) end)
+    riftSec:ColorPicker("bl_rift_col", 1.0, 0.25, 0.08, 1, function() end)
+    riftSec:Toggle("bl_rift_name", "Show Name", getUI("bl_rift_name", true), function(v) UI.SetValue("bl_rift_name", v) end)
+    riftSec:Toggle("bl_rift_dist", "Show Distance", getUI("bl_rift_dist", true), function(v) UI.SetValue("bl_rift_dist", v) end)
+    riftSec:Toggle("bl_rift_trc", "Directional Tracer", getUI("bl_rift_trc", false), function(v) UI.SetValue("bl_rift_trc", v) end)
+    riftSec:Toggle("bl_rift_notify", "Spawn Alert Notify", getUI("bl_rift_notify", true), function(v) UI.SetValue("bl_rift_notify", v) end)
 
     local csSec = tab:Section("Chakra Sense Radar", "Left")
+    csSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", getUI("bl_jutsu_tag", true), function(v) UI.SetValue("bl_jutsu_tag", v) end)
+    csSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", getUI("bl_jutsu_self", false), function(v) UI.SetValue("bl_jutsu_self", v) end)
+    csSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", getUI("bl_jutsu_mobs", false), function(v) UI.SetValue("bl_jutsu_mobs", v) end)
+    csSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (heavier, catches instant casts)", getUI("bl_jutsu_cd", true), function(v) UI.SetValue("bl_jutsu_cd", v) end)
     csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", getUI("bl_cs_en", true), function(v) UI.SetValue("bl_cs_en", v) end)
     csSec:Toggle("bl_cs_notify", "Notify On Detected", getUI("bl_cs_notify", true), function(v) UI.SetValue("bl_cs_notify", v) end)
     csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", getUI("bl_cs_use_notify", true), function(v) UI.SetValue("bl_cs_use_notify", v) end)
     csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", getUI("bl_cs_hud", true), function(v) UI.SetValue("bl_cs_hud", v) end)
-
-    local animSec = tab:Section("Animation Tracker", "Left")
-    animSec:Toggle("bl_anim_en", "Animation Tracker Enabled", getUI("bl_anim_en", true), function(v) UI.SetValue("bl_anim_en", v) end)
-    animSec:Toggle("bl_anim_hud", "Show Screen HUD", getUI("bl_anim_hud", true), function(v) UI.SetValue("bl_anim_hud", v) end)
-    animSec:Toggle("bl_anim_self", "Track Self Animation", getUI("bl_anim_self", false), function(v) UI.SetValue("bl_anim_self", v) end)
-    animSec:Keybind("bl_anim_cycle_kb", Enum.KeyCode.T.Value, "toggle")
-    animSec:Toggle("bl_anim_players", "Target Players Instead of Mobs", getUI("bl_anim_players", false), function(v) UI.SetValue("bl_anim_players", v) end)
-    animSec:Toggle("bl_anim_tag", "Show 3D Floating Anim Tag", getUI("bl_anim_tag", true), function(v) UI.SetValue("bl_anim_tag", v) end)
 
     -- ================= RIGHT COLUMN =================
     local npcSec = tab:Section("Town & Friendly NPCs", "Right")
@@ -677,17 +500,19 @@ UI.AddTab("Bloodline", function(tab)
 end)
 
 -- ============================================================
---  STREAMLINED DRAWING POOLS (12 Mobs, 16 Items, 8 NPCs, 8 Corrupt)
+--  DRAWING POOLS (12 Mobs, 16 Items, 8 NPCs, 8 Corrupt)
 -- ============================================================
 local MOB_POOL_SIZE     = 12
 local ITEM_POOL_SIZE    = 16
 local NPC_POOL_SIZE     = 8
 local CORRUPT_POOL_SIZE = 8
+local RIFT_POOL_SIZE    = 6
 
 local mobPool     = {}
 local itemPool    = {}
 local npcPool     = {}
 local corruptPool = {}
+local riftPool    = {}
 
 for i = 1, MOB_POOL_SIZE do
     local box = Drawing.new("Square")
@@ -719,6 +544,24 @@ for i = 1, CORRUPT_POOL_SIZE do
     tag.Color = COL_PURP_TXT
     corruptPool[i] = { box = box, tag = tag, isShown = false, lastText = "",
         vis = { box = false, tag = false }, c = {}, textAt = 0, owner = nil }
+end
+
+for i = 1, RIFT_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1.2; tracer.Visible = false
+
+    box.Color = Color3.fromRGB(200, 50, 255)
+    tag.Color = Color3.fromRGB(240, 160, 255)
+    tracer.Color = Color3.fromRGB(200, 50, 255)
+
+    riftPool[i] = { box = box, tag = tag, tracer = tracer, isShown = false, lastText = "",
+        vis = { box = false, tag = false, tracer = false }, c = {}, line = { fx = -1, fy = -1, tx = -1, ty = -1 }, textAt = 0, owner = nil }
 end
 
 for i = 1, NPC_POOL_SIZE do
@@ -763,46 +606,37 @@ csHudContent.Color = Color3.fromRGB(240, 240, 240)
 csHudContent.Outline = true
 csHudContent.Visible = false
 csHudContent.Position = Vector2.new(16, 238)
-local lastCsHudText = ""
 
--- Animation Tracker HUD & 3D World Tag Drawings
-local animHudTitle = Drawing.new("Text")
-animHudTitle.Size = 13
-animHudTitle.Font = Drawing.Fonts.SystemBold
-animHudTitle.Color = Color3.fromRGB(255, 215, 0)
-animHudTitle.Outline = true
-animHudTitle.Visible = false
-animHudTitle.Position = Vector2.new(16, 280)
+-- Jutsu Overhead Tag State
+local JutsuRadar = {
+    tags = {},
+    activeCasts = {},   -- [key] = { skill, label, expireTime, root, who }
+    lastCD = {},        -- [playerName] = { [skillName] = lastValue }
+    rsSettingsCache = nil,
+    cdFolderCache = nil,
+    csCache = {},       -- [playerName] = CurrentSkill value instance
+    csCacheAt = {},     -- [playerName] = time the instance was resolved
+    csMiss = {},
+    near = {},          -- [playerName] = distance (published by the detector)
+    roots = {},         -- [playerName] = HumanoidRootPart (published by the detector)
+    cdMap = nil,        -- [playerName] = Cooldowns subfolder
+    cdMapAt = -100,
+    skillLists = {},    -- cached per-player cooldown value lists
+}
+for i = 1, 16 do
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = true
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(255, 210, 50)
+    tag.Visible = false
+    JutsuRadar.tags[i] = { tag = tag, vis = false, text = "", x = nil, y = nil }
+end
+_G.Bloodline_JutsuRadar = JutsuRadar
 
-local animHudTarget = Drawing.new("Text")
-animHudTarget.Size = 12
-animHudTarget.Font = Drawing.Fonts.SystemBold
-animHudTarget.Color = Color3.fromRGB(0, 230, 255)
-animHudTarget.Outline = true
-animHudTarget.Visible = false
-animHudTarget.Position = Vector2.new(16, 298)
-
-local animHudContent = Drawing.new("Text")
-animHudContent.Size = 12
-animHudContent.Font = Drawing.Fonts.System
-animHudContent.Color = Color3.fromRGB(240, 240, 240)
-animHudContent.Outline = true
-animHudContent.Visible = false
-animHudContent.Position = Vector2.new(16, 316)
-
-local animTargetTag = Drawing.new("Text")
-animTargetTag.Size = 12
-animTargetTag.Font = Drawing.Fonts.SystemBold
-animTargetTag.Color = Color3.fromRGB(255, 230, 80)
-animTargetTag.Center = true
-animTargetTag.Outline = true
-animTargetTag.Visible = false
-
-local lastAnimHudTargetText = ""
-local lastAnimHudText = ""
-
--- Shadow visibility flags: we never READ .Visible from a Drawing (every property read crosses
--- the engine bridge); we remember what we last wrote and only write on change.
+-- Shadow visibility flags: we never READ .Visible from a Drawing; we remember what we last
+-- wrote and only write on change.
 local function setVis(s, key, want)
     local vis = s.vis
     if vis[key] ~= want then
@@ -825,6 +659,14 @@ local function hideCorruptSlot(s)
     s.isShown = false
     setVis(s, "box", false)
     setVis(s, "tag", false)
+end
+
+local function hideRiftSlot(s)
+    if not s or not s.isShown then return end
+    s.isShown = false
+    setVis(s, "box", false)
+    setVis(s, "tag", false)
+    setVis(s, "tracer", false)
 end
 
 local function hideNPCSlot(s)
@@ -870,21 +712,17 @@ end
 
 _G.Bloodline_mobPool     = mobPool
 _G.Bloodline_corruptPool = corruptPool
+_G.Bloodline_riftPool    = riftPool
 _G.Bloodline_npcPool     = npcPool
 _G.Bloodline_itemPool    = itemPool
 _G.Bloodline_csHudTitle  = csHudTitle
 _G.Bloodline_csHudContent= csHudContent
-_G.Bloodline_animHudTitle   = animHudTitle
-_G.Bloodline_animHudTarget  = animHudTarget
-_G.Bloodline_animHudContent = animHudContent
-_G.Bloodline_animTargetTag  = animTargetTag
 _G.Bloodline_eventBox    = eventBox
 _G.Bloodline_eventTag    = eventTag
 _G.Bloodline_eventTracer = eventTracer
 _G.Bloodline_running     = true
 
--- Generation token: when the script is re-executed, the OLD loops used to wake up, see
--- Bloodline_running == true again and keep running next to the new ones (double scan cost).
+-- Generation token: when the script is re-executed, old loops stop instead of running next to the new ones.
 local MY_GEN = (_G.Bloodline_gen or 0) + 1
 _G.Bloodline_gen = MY_GEN
 local function alive()
@@ -913,29 +751,11 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_csHudContent = nil
     end
 
-    if _G.Bloodline_animHudTitle then
-        pcall(function() _G.Bloodline_animHudTitle:Remove() end)
-        _G.Bloodline_animHudTitle = nil
-    end
-
-    if _G.Bloodline_animHudTarget then
-        pcall(function() _G.Bloodline_animHudTarget:Remove() end)
-        _G.Bloodline_animHudTarget = nil
-    end
-
-    if _G.Bloodline_animHudContent then
-        pcall(function() _G.Bloodline_animHudContent:Remove() end)
-        _G.Bloodline_animHudContent = nil
-    end
-
-    if _G.Bloodline_animTargetTag then
-        pcall(function() _G.Bloodline_animTargetTag:Remove() end)
-        _G.Bloodline_animTargetTag = nil
-    end
-
-    if _G.Bloodline_animInputConn then
-        pcall(function() _G.Bloodline_animInputConn:Disconnect() end)
-        _G.Bloodline_animInputConn = nil
+    if _G.Bloodline_JutsuRadar and _G.Bloodline_JutsuRadar.tags then
+        for i = 1, #_G.Bloodline_JutsuRadar.tags do
+            pcall(function() _G.Bloodline_JutsuRadar.tags[i].tag:Remove() end)
+        end
+        _G.Bloodline_JutsuRadar = nil
     end
 
     if _G.Bloodline_eventBox then
@@ -967,6 +787,13 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_corruptPool = nil
     end
 
+    if _G.Bloodline_riftPool then
+        for _, s in ipairs(_G.Bloodline_riftPool) do
+            pcall(function() s.box:Remove(); s.tag:Remove(); s.tracer:Remove() end)
+        end
+        _G.Bloodline_riftPool = nil
+    end
+
     if _G.Bloodline_npcPool then
         for _, s in ipairs(_G.Bloodline_npcPool) do
             pcall(function() s.box:Remove(); s.tag:Remove() end)
@@ -990,9 +817,8 @@ end
 -- ============================================================
 local SCAN_INTERVAL     = 0.30   -- pause between full Workspace passes (s)
 local SCAN_SLICE_BUDGET = 0.003  -- max seconds of scan work per frame before yielding
-local ANIM_INTERVAL     = 0.10   -- animation tracker refresh (s)
 local SETTINGS_POLL     = 0.10   -- how often UI toggles are re-read (s)
-local MAX_RENDER_FPS    = 90     -- renderer cap (0 = uncapped). See MIN_FRAME_TIME below.
+local MAX_RENDER_FPS    = 90     -- renderer cap (0 = uncapped)
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
 local NEG_TTL_BASE      = 4.0    -- how long "not interesting" objects are skipped (s) ...
 local NEG_TTL_JITTER    = 3.0    -- ... plus up to this much random jitter
@@ -1006,7 +832,7 @@ local COL_ITEM_DEFAULT = Color3.fromRGB(0, 255, 120)
 -- ============================================================
 --  SHARED STATE
 -- ============================================================
-local trackedMobs, trackedCorrupt, trackedNPCs, trackedItems = {}, {}, {}, {}
+local trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
 local trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = {}, "", "", 0
 local trackedBeastTamer = nil
 
@@ -1014,13 +840,11 @@ local notifiedItems         = {}
 local notifiedChakraUsers   = {}
 local lastChakraCastState   = {}
 local notifiedBeastTamer    = {}
+local notifiedPumpkin       = {}
+local notifiedRifts         = {}
 
-local animCandidates        = {}
-local animActiveTarget      = nil
-local animLockedTarget      = nil
-local animCandidateIndex    = 1
-local animLiveData          = nil
-local animAux               = {}   -- [modelAddress] = cached Animator / Settings values
+local mobCands              = {}   -- nearby combat mobs / world bosses, nearest first (for jutsu tags)
+local mobAux                = {}   -- [modelAddress] = cached Settings.CurrentSkill instance
 
 local drawDirty  = true            -- tells the renderer to rebuild its draw lists
 local scanEpoch  = 0               -- bumped on teleport so half-finished passes get discarded
@@ -1031,18 +855,18 @@ local function getAddr(o)   return o.Address end
 local function getPosOf(o)  return o.Position end
 local function getHealth(h) return h.Health end
 local function getValue(v)  return v.Value end
-local function getMaxHealth(h) return h.MaxHealth end
 local function readMob(m)   return m.root.Position, m.hum.Health end
-
-local function safeAddr(o)
-    local ok, a = pcall(getAddr, o)
-    if ok then return a end
-    return nil
-end
+local function getServerNow() return Workspace:GetServerTimeNow() end
 
 local function isAliveHum(h)
     local ok, hp = pcall(getHealth, h)
     return ok and isValidNum(hp) and hp > 0
+end
+
+local function serverNow()
+    local ok, t = pcall(getServerNow)
+    if ok and type(t) == "number" then return t end
+    return os.time()
 end
 
 local function byDist(a, b) return a.dist < b.dist end
@@ -1055,143 +879,567 @@ local function capList(list, n)
 end
 
 -- ============================================================
---  ANIMATION CYCLE KEY
+--  JUTSU DETECTOR (own thread, TIME-SLICED + BUDGETED)
+--
+--  Why the old one lagged: one tick did hundreds of .Value reads in a single frame
+--  (every cooldown of every nearby player), which showed up as a frame spike.
+--
+--  Now:
+--   * HARD per-frame budget (FRAME_BUDGET). When the detector has used its slice it calls
+--     task.wait() and continues next frame, so it can never stall a frame.
+--   * CurrentSkill (1 read per player) is the cheap main source, checked every cycle.
+--   * Cooldown scanning (many reads per player) is optional (toggle "Cooldown Scan"), only for the
+--     CD_PLAYERS_MAX nearest players, and ROUND-ROBIN: CD_PER_CYCLE players per cycle.
+--   * Mobs/bosses: 5 nearest, every 3rd cycle.
+--   * Players are pre-sorted by distance twice a second, so no sorting per cycle.
+--   * Sleeps when the toggle is off or nobody is around.
 -- ============================================================
-local UserInputService = game:GetService("UserInputService")
-local animInputConn
-pcall(function()
-    animInputConn = UserInputService.InputBegan:Connect(function(input)
-        if not alive() then return end
-        local key = input.KeyCode
-        local cycleKey = getUI("bl_anim_cycle_kb", Enum.KeyCode.T.Value)
-        if not key or not cycleKey then return end
-        local kv = key
-        if type(key) ~= "number" then kv = key.Value end
-        if key == cycleKey or kv == cycleKey then
-            if #animCandidates > 0 then
-                animCandidateIndex = (animCandidateIndex % #animCandidates) + 1
-                local cand = animCandidates[animCandidateIndex]
-                if cand then
-                    animLockedTarget = cand
-                    notify("Animation Tracker", string.format("Locked: %s [%dm]", cand.name, math.floor(cand.dist or 0)), 2)
-                end
-            else
-                notify("Animation Tracker", "No mobs or players in range to track!", 2)
-            end
-        end
-    end)
-end)
-_G.Bloodline_animInputConn = animInputConn
+-- ============================================================
+--  ELEMENTAL JUTSU COLOR PALETTE & MAPPING
+-- ============================================================
+local JUTSU_COLORS = {
+    FLAME     = Color3.fromRGB(255, 115, 0),   -- High-Visibility Radiant Flame Orange
+    EARTH     = Color3.fromRGB(180, 115, 60),  -- Terracotta Brown (Earth)
+    WATER     = Color3.fromRGB(0, 160, 255),   -- Vivid Ocean / Sky Blue (Water)
+    LIGHTNING = Color3.fromRGB(75, 125, 255),  -- Electric Plasma Cobalt Blue (Chidori / Lightning)
+    SEALING   = Color3.fromRGB(195, 70, 255),  -- Mystic Royal Purple (Sealing)
+    WIND      = Color3.fromRGB(110, 255, 200), -- Aero Mint / Seafoam (Wind)
+    CHAKRA    = Color3.fromRGB(30, 240, 220),  -- Spiritual Soul Turquoise / Cyan (Chakra)
+    HEALING   = Color3.fromRGB(60, 255, 110),  -- Luminous Emerald Green (Healing)
+    CLONE     = Color3.fromRGB(255, 195, 60),  -- Golden Amber (Clone)
+    GENJUTSU  = Color3.fromRGB(55, 55, 65),    -- Dark Raven Charcoal Black (Genjutsu)
+    WOOD      = Color3.fromRGB(75, 160, 55),   -- Deep Forest Timber Olive (Wood)
+    ICE       = Color3.fromRGB(210, 245, 255), -- Crystalline Glacial Frost White (Ice)
+    SAND      = Color3.fromRGB(225, 185, 115), -- Desert Dune Tan/Khaki (Sand)
+    DEFAULT   = Color3.fromRGB(255, 255, 255), -- Clean White fallback
+}
 
--- ============================================================
---  LOOP A: ANIMATION WORKER (own thread, fully pcall-protected)
---  The old version had no pcall: ONE error (target despawned mid-read) killed the thread
---  silently and the tracker froze on stale data forever.
--- ============================================================
-local function getAux(target)
-    local a = target.addr
-    if not a then
-        local t = target.auxLocal
-        if not t then t = {}; target.auxLocal = t end
-        return t
+local EXACT_SPELL_MAP = {
+    -- Flame / Fire
+    ["Phoenix Flower"]          = JUTSU_COLORS.FLAME,
+    ["Phoenix Flowers"]         = JUTSU_COLORS.FLAME,
+    ["Dragonic Flames"]         = JUTSU_COLORS.FLAME,
+    ["Flame Company"]           = JUTSU_COLORS.FLAME,
+    ["Fireball"]                = JUTSU_COLORS.FLAME,
+    ["Fire Seal"]               = JUTSU_COLORS.FLAME,
+    ["Asakujaku"]               = JUTSU_COLORS.FLAME,
+    ["Great Fireball"]          = JUTSU_COLORS.FLAME,
+    ["Dragon Flame"]            = JUTSU_COLORS.FLAME,
+    ["Amaterasu"]               = JUTSU_COLORS.FLAME,
+
+    -- Earth
+    ["Dome Defense"]            = JUTSU_COLORS.EARTH,
+    ["Mud Wall"]                = JUTSU_COLORS.EARTH,
+    ["Spinning Human Boulder"]  = JUTSU_COLORS.EARTH,
+    ["Chakra Infused Slam"]     = JUTSU_COLORS.EARTH,
+
+    -- Water
+    ["Pool Expansion"]          = JUTSU_COLORS.WATER,
+    ["Water Dragon"]            = JUTSU_COLORS.WATER,
+    ["Water Fountain"]          = JUTSU_COLORS.WATER,
+    ["Water Pool"]              = JUTSU_COLORS.WATER,
+    ["Water Wave"]              = JUTSU_COLORS.WATER,
+    ["Water Wall"]              = JUTSU_COLORS.WATER,
+    ["Water Shark"]             = JUTSU_COLORS.WATER,
+    ["Water Prison"]            = JUTSU_COLORS.WATER,
+
+    -- Lightning
+    ["Chidori"]                 = JUTSU_COLORS.LIGHTNING,
+    ["Kirin"]                   = JUTSU_COLORS.LIGHTNING,
+    ["Lightning Ripple"]        = JUTSU_COLORS.LIGHTNING,
+    ["Lightning Strike"]        = JUTSU_COLORS.LIGHTNING,
+    ["Raikiri"]                 = JUTSU_COLORS.LIGHTNING,
+
+    -- Sealing
+    ["Sealing Floor"]           = JUTSU_COLORS.SEALING,
+    ["Chain Pull"]              = JUTSU_COLORS.SEALING,
+    ["Chains Of The Wild"]      = JUTSU_COLORS.SEALING,
+    ["Protruding Chains"]       = JUTSU_COLORS.SEALING,
+    ["Reaper Death Seal"]       = JUTSU_COLORS.SEALING,
+
+    -- Wind
+    ["Gale Palm"]               = JUTSU_COLORS.WIND,
+    ["Rasengan"]                = JUTSU_COLORS.WIND,
+    ["Rasengan Barrage"]        = JUTSU_COLORS.WIND,
+    ["Rasenshuriken"]           = JUTSU_COLORS.WIND,
+    ["Improved Whirlwind"]      = JUTSU_COLORS.WIND,
+    ["Vacuum Rotation"]         = JUTSU_COLORS.WIND,
+
+    -- Chakra
+    ["Chakra Sense"]            = JUTSU_COLORS.CHAKRA,
+    ["Chakra Scalpel"]          = JUTSU_COLORS.CHAKRA,
+    ["128 Palms"]               = JUTSU_COLORS.CHAKRA,
+    ["Twin Strike"]             = JUTSU_COLORS.CHAKRA,
+    ["Thrusting Strike"]        = JUTSU_COLORS.CHAKRA,
+
+    -- Healing
+    ["Self Purification"]       = JUTSU_COLORS.HEALING,
+    ["Coalescence"]             = JUTSU_COLORS.HEALING,
+    ["Mystical Palm"]           = JUTSU_COLORS.HEALING,
+
+    -- Clone
+    ["Bamboozle"]               = JUTSU_COLORS.CLONE,
+
+    -- Genjutsu
+    ["Feather Genjutsu"]        = JUTSU_COLORS.GENJUTSU,
+    ["Fog Illusion"]            = JUTSU_COLORS.GENJUTSU,
+    ["Scrambled Mind"]          = JUTSU_COLORS.GENJUTSU,
+    ["Crow Illusion"]           = JUTSU_COLORS.GENJUTSU,
+    ["Genjutsu Release"]        = JUTSU_COLORS.GENJUTSU,
+    ["Izanagi"]                 = JUTSU_COLORS.GENJUTSU,
+
+    -- Wood
+    ["Deep Forest Emergence"]   = JUTSU_COLORS.WOOD,
+
+    -- Ice
+    ["Crystal Ice Mirrors"]     = JUTSU_COLORS.ICE,
+    ["Ice Mirrors"]             = JUTSU_COLORS.ICE,
+
+    -- Sand
+    ["Sand Tsunami"]            = JUTSU_COLORS.SAND,
+    ["Sand Coffin"]             = JUTSU_COLORS.SAND,
+    ["Sand Burial"]             = JUTSU_COLORS.SAND,
+}
+
+local function getJutsuColor(skillName)
+    if not skillName then return JUTSU_COLORS.DEFAULT end
+    local exact = EXACT_SPELL_MAP[skillName]
+    if exact then return exact end
+
+    local s = string.lower(skillName)
+
+    -- Specific keyword matching (order prioritized)
+    if string.find(s, "amaterasu") or string.find(s, "phoenix") or string.find(s, "flame") or string.find(s, "fire")
+        or string.find(s, "blaze") or string.find(s, "burn") or string.find(s, "inferno") or string.find(s, "spark")
+        or string.find(s, "ember") or string.find(s, "asakujaku") then
+        return JUTSU_COLORS.FLAME
     end
-    local aux = animAux[a]
-    if not aux then aux = {}; animAux[a] = aux end
-    return aux
+
+    if string.find(s, "genjutsu") or string.find(s, "illusion") or string.find(s, "mirage")
+        or string.find(s, "scrambled") or string.find(s, "crow") or string.find(s, "izanagi")
+        or string.find(s, "tsukuyomi") then
+        return JUTSU_COLORS.GENJUTSU
+    end
+
+    if string.find(s, "bamboozle") or string.find(s, "clone") then
+        return JUTSU_COLORS.CLONE
+    end
+
+    if string.find(s, "heal") or string.find(s, "purif") or string.find(s, "coalesc")
+        or string.find(s, "cure") or string.find(s, "vital") or string.find(s, "mystical palm") then
+        return JUTSU_COLORS.HEALING
+    end
+
+    if string.find(s, "wood") or string.find(s, "forest") or string.find(s, "timber") or string.find(s, "tree") then
+        return JUTSU_COLORS.WOOD
+    end
+
+    if string.find(s, "ice") or string.find(s, "frost") or string.find(s, "frozen")
+        or string.find(s, "mirror") or string.find(s, "blizzard") or string.find(s, "glacier") then
+        return JUTSU_COLORS.ICE
+    end
+
+    if string.find(s, "sand") or string.find(s, "desert") or string.find(s, "dune") then
+        return JUTSU_COLORS.SAND
+    end
+
+    if string.find(s, "earth") or string.find(s, "mud") or string.find(s, "rock")
+        or string.find(s, "stone") or string.find(s, "boulder") or string.find(s, "ground")
+        or string.find(s, "dome defense") then
+        return JUTSU_COLORS.EARTH
+    end
+
+    if string.find(s, "water") or string.find(s, "aqua") or string.find(s, "pool")
+        or string.find(s, "wave") or string.find(s, "tide") or string.find(s, "shark")
+        or string.find(s, "fountain") or string.find(s, "prison") then
+        return JUTSU_COLORS.WATER
+    end
+
+    if string.find(s, "lightning") or string.find(s, "chidori") or string.find(s, "kirin")
+        or string.find(s, "raikiri") or string.find(s, "thunder") or string.find(s, "shock")
+        or string.find(s, "bolt") or string.find(s, "electric") then
+        return JUTSU_COLORS.LIGHTNING
+    end
+
+    if string.find(s, "seal") or string.find(s, "chain") or string.find(s, "bind")
+        or string.find(s, "reaper") then
+        return JUTSU_COLORS.SEALING
+    end
+
+    if string.find(s, "wind") or string.find(s, "gale") or string.find(s, "rasen")
+        or string.find(s, "whirlwind") or string.find(s, "vacuum") or string.find(s, "gust")
+        or string.find(s, "air") or string.find(s, "tempest") then
+        return JUTSU_COLORS.WIND
+    end
+
+    if string.find(s, "chakra") or string.find(s, "palm") or string.find(s, "byakugan")
+        or string.find(s, "strike") then
+        return JUTSU_COLORS.CHAKRA
+    end
+
+    return JUTSU_COLORS.DEFAULT
 end
 
-local function animStep()
-    if not (S.bl_anim_en and (S.bl_anim_hud or S.bl_anim_tag)) then
-        animLiveData = nil
-        return
+local setCast
+do
+local JUTSU_NEAR       = 100    -- cooldown scan + every-cycle CurrentSkill range
+local JUTSU_RANGE      = 200    -- CurrentSkill-only range (every 4th cycle)
+local JUTSU_MOB_RANGE  = 120
+local JUTSU_MOB_MAX    = 5
+local PLAYER_REFRESH   = 0.5
+local CS_RECHECK       = 15
+local CD_PLAYERS_MAX   = 4      -- cooldown scan only for the N nearest players
+local CD_PER_CYCLE     = 4      -- scan all eligible nearest players every cycle
+local FRAME_BUDGET     = 0.0010 -- seconds of detector work per frame before yielding
+local CYCLE_ACTIVE     = 0.12
+local CYCLE_IDLE       = 0.30
+local CYCLE_OFF        = 0.50
+
+local sliceStart = 0
+local function budgetYield()
+    if (os.clock() - sliceStart) > FRAME_BUDGET then
+        task.wait()
+        sliceStart = os.clock()
+    end
+end
+
+-- Create / refresh a jutsu cast shown above a head. The label string is built once here.
+function setCast(key, skill, ttl, root, who)
+    local now = os.clock()
+    local lp = Players.LocalPlayer
+    local isSelf = (who and lp and who == lp.Name) or (who == P_myName)
+    local prefix = isSelf and "[SELF] " or ""
+    local c = JutsuRadar.activeCasts[key]
+    if c and c.skill == skill then
+        local exp = now + ttl
+        if exp > c.expireTime then c.expireTime = exp end
+        if root then c.root = root end
+        if who then c.who = who end
+    else
+        JutsuRadar.activeCasts[key] = {
+            skill = skill, label = prefix .. "[" .. tostring(skill) .. "]",
+            expireTime = now + ttl, root = root, who = who, isSelf = isSelf,
+        }
+    end
+end
+
+local function readCooldownValue(s) return s.Value end
+
+local function rootOf(char)
+    return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+end
+
+local function nearLess(a, b) return JutsuRadar.near[a] < JutsuRadar.near[b] end
+
+-- Own player list: roots + distances + distance-sorted order + pruning of per-player caches
+local lastPlayerRefresh = -100
+local function refreshPlayers(now)
+    if (now - lastPlayerRefresh) < PLAYER_REFRESH then return end
+    lastPlayerRefresh = now
+
+    local lp = Players.LocalPlayer
+    local myPos = lastMyPos
+    local lpRoot = rootOf(lp and lp.Character)
+    if lpRoot then
+        local okP, p = pcall(getPosOf, lpRoot)
+        if okP and isValidVec3(p) then myPos = p end
     end
 
-    local target = animActiveTarget
-    if not (target and target.model and target.hum) then
-        animLiveData = nil
-        return
-    end
-
-    local hum = target.hum
-    local okHp, hp = pcall(getHealth, hum)
-    if not (okHp and isValidNum(hp) and hp > 0) then
-        animLiveData = nil
-        animLockedTarget = nil
-        return
-    end
-
-    local aux = getAux(target)
-
-    local okT, rawTracks = pcall(GetPlayingAnimationTracks, hum, aux)
-    if not okT then
-        aux.animator = nil
-        rawTracks = {}
-    end
-
-    local displayTracks = {}
-    for i = 1, math.min(#rawTracks, 4) do
-        local t = rawTracks[i]
-        displayTracks[i] = { id = t.numId, rawId = t.animId, time = t.timePos }
-    end
-
-    -- Settings / CurrentSkill / Blocking: look them up once per second at most, then reuse
-    if not aux.skillVal and not aux.blockVal then
-        local nowc = os.clock()
-        if (nowc - (aux.settingsAt or 0)) >= 1 then
-            aux.settingsAt = nowc
-            local settings = target.model:FindFirstChild("Settings")
-            if settings then
-                aux.skillVal = settings:FindFirstChild("CurrentSkill")
-                aux.blockVal = settings:FindFirstChild("Blocking")
+    local roots, near, names, order = {}, {}, {}, {}
+    local list = Players:GetPlayers()
+    for i = 1, #list do
+        local p = list[i]
+        if p then
+            local pn = tostring(p.Name or "")
+            names[pn] = true
+            if p ~= lp or S.bl_jutsu_self then
+                local root = rootOf(p.Character)
+                if root then
+                    local okR, rp = pcall(getPosOf, root)
+                    if okR and isValidVec3(rp) then
+                        local d = (myPos - rp).Magnitude
+                        if d == d and (d <= JUTSU_RANGE or p == lp) then
+                            roots[pn] = root
+                            near[pn] = d
+                            order[#order + 1] = pn
+                        end
+                    end
+                end
             end
         end
     end
+    JutsuRadar.roots = roots
+    JutsuRadar.near  = near
+    table.sort(order, nearLess)
+    JutsuRadar.order = order
 
-    local curSkill, isGuarding = "", false
-    if aux.skillVal then
-        local okV, v = pcall(getValue, aux.skillVal)
-        if okV then curSkill = tostring(v or "") else aux.skillVal = nil end
+    -- Prune. lastCD is only dropped when a player leaves the server so baseline is never lost
+    for n in pairs(JutsuRadar.lastCD) do
+        if not names[n] then JutsuRadar.lastCD[n] = nil end
     end
-    if aux.blockVal then
-        local okV, v = pcall(getValue, aux.blockVal)
-        if okV then isGuarding = (v == true) else aux.blockVal = nil end
+    for n in pairs(JutsuRadar.skillLists) do
+        if not names[n] then JutsuRadar.skillLists[n] = nil end
+    end
+    for n in pairs(JutsuRadar.csCache) do
+        if not names[n] then
+            JutsuRadar.csCache[n] = nil
+            JutsuRadar.csCacheAt[n] = nil
+            JutsuRadar.csMiss[n] = nil
+        end
+    end
+end
+
+local function refreshCooldownMap(cdFolder, now)
+    if (now - JutsuRadar.cdMapAt) < 3 then return end
+    JutsuRadar.cdMapAt = now
+    local map = {}
+    local kids = cdFolder:GetChildren()
+    for i = 1, #kids do
+        local f = kids[i]
+        if f then map[f.Name] = f end
+    end
+    JutsuRadar.cdMap = map
+end
+
+local function skillListFor(pName, pFolder, now)
+    local rec = JutsuRadar.skillLists[pName]
+    local vals = pFolder:GetChildren()
+    if rec and rec.folder == pFolder and #vals == #rec.vals and (now - rec.at) < 1.0 then
+        return rec
+    end
+    local names = {}
+    for j = 1, #vals do names[j] = vals[j].Name end
+    rec = { folder = pFolder, at = now, vals = vals, names = names }
+    JutsuRadar.skillLists[pName] = rec
+    return rec
+end
+
+local function checkPlayerCooldowns(pName, rec)
+    local pCD = JutsuRadar.lastCD[pName]
+    local baselineOnly = false
+    if not pCD then
+        pCD = {}
+        JutsuRadar.lastCD[pName] = pCD
+        baselineOnly = true     -- first poll after player is registered: just remember existing values
+    end
+    local vals, names = rec.vals, rec.names
+    local root = JutsuRadar.roots[pName]
+    for j = 1, #vals do
+        local ok, cur = pcall(readCooldownValue, vals[j])
+        if ok and type(cur) == "number" then
+            local sName = names[j]
+            local old = pCD[sName]
+            if old ~= nil then
+                if cur > old + 0.05 then
+                    setCast(pName, sName, 2.5, root, pName)
+                    pCD[sName] = cur
+                elseif cur < old then
+                    pCD[sName] = cur
+                end
+            else
+                pCD[sName] = cur
+                if not baselineOnly then
+                    -- Brand new skill child created in Cooldowns while player is active:
+                    -- In Bloodline, this happens when the player casts this jutsu for the first time!
+                    setCast(pName, sName, 2.5, root, pName)
+                end
+            end
+        end
+        if j % 8 == 0 then budgetYield() end
+    end
+end
+
+local function checkPlayerCurrentSkill(pName, now)
+    local cs = JutsuRadar.csCache[pName]
+    if cs and (now - (JutsuRadar.csCacheAt[pName] or 0)) > CS_RECHECK then
+        cs = nil
+        JutsuRadar.csCache[pName] = nil
+    end
+    if not cs then
+        if (now - (JutsuRadar.csMiss[pName] or -100)) < 2 then return end
+        JutsuRadar.csMiss[pName] = now
+        local rsSettings = JutsuRadar.rsSettingsCache
+        if not rsSettings then
+            rsSettings = game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+            JutsuRadar.rsSettingsCache = rsSettings
+        end
+        local f = rsSettings and rsSettings:FindFirstChild(pName)
+        cs = f and f:FindFirstChild("CurrentSkill")
+        if not cs then return end
+        JutsuRadar.csCache[pName] = cs
+        JutsuRadar.csCacheAt[pName] = now
+    end
+    local ok, v = pcall(getValue, cs)
+    if not ok then
+        JutsuRadar.csCache[pName] = nil
+        return
+    end
+    local skill = tostring(v or "")
+    if skill ~= "" and skill ~= "None" then
+        setCast(pName, skill, 2.0, JutsuRadar.roots[pName], pName)
+    end
+end
+
+local function checkMobSkill(c, now)
+    local a = c.addr
+    local aux = a and mobAux[a]
+    if not aux then
+        aux = {}
+        if a then mobAux[a] = aux end
     end
 
-    local okMax, maxHp = pcall(getMaxHealth, hum)
-    animLiveData = {
-        name     = target.name,
-        hp       = hp,
-        maxHp    = (okMax and maxHp) or 100,
-        dist     = target.dist or 0,
-        tracks   = displayTracks,
-        skill    = curSkill,
-        guard    = isGuarding,
-        root     = target.root,
-        model    = target.model,
-        isSelf   = target.isSelf,
-        isLocked = (animLockedTarget ~= nil),
-    }
+    if aux.skillVal and (now - (aux.skillAt or 0)) > CS_RECHECK then aux.skillVal = nil end
+    if not aux.skillVal then
+        if (now - (aux.missAt or -100)) < 1.5 then return end
+        aux.missAt = now
+        local settings = c.model:FindFirstChild("Settings")
+        aux.skillVal = settings and settings:FindFirstChild("CurrentSkill")
+        aux.skillAt = now
+        if not aux.skillVal then return end
+    end
+
+    local ok, v = pcall(getValue, aux.skillVal)
+    if not ok then
+        aux.skillVal = nil
+        return
+    end
+    local skill = tostring(v or "")
+    if skill ~= "" and skill ~= "None" then
+        setCast(c.name .. "#" .. tostring(a or 0), skill, 2.0, c.root, nil)
+    end
+end
+
+-- ---- sections, each wrapped in its own pcall by updateActiveCasts ----
+local eligBuf, cdCursor = {}, 0
+local function sectionCooldowns(now)
+    if not JutsuRadar.cdFolderCache then
+        JutsuRadar.cdFolderCache = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
+    end
+    local cdFolder = JutsuRadar.cdFolderCache
+    if not cdFolder then return end
+
+    local okMap = pcall(refreshCooldownMap, cdFolder, now)
+    if not okMap then JutsuRadar.cdFolderCache = nil; return end
+    local map = JutsuRadar.cdMap
+    if not map then return end
+
+    local order, near = JutsuRadar.order, JutsuRadar.near
+    if not order then return end
+    local n = 0
+    for i = 1, #order do
+        local pn = order[i]
+        local d = near[pn]
+        if not d or d > JUTSU_NEAR or n >= CD_PLAYERS_MAX then break end
+        n = n + 1
+        eligBuf[n] = pn
+    end
+    for i = #eligBuf, n + 1, -1 do eligBuf[i] = nil end
+    if n == 0 then return end
+
+    local per = (n < CD_PER_CYCLE) and n or CD_PER_CYCLE
+    for _ = 1, per do
+        cdCursor = (cdCursor % n) + 1
+        local pn = eligBuf[cdCursor]
+        local pFolder = pn and map[pn]
+        if pFolder then
+            local okR, rec = pcall(skillListFor, pn, pFolder, now)
+            if okR and rec then
+                pcall(checkPlayerCooldowns, pn, rec)
+            end
+        end
+        budgetYield()
+    end
+end
+
+local function sectionCurrentSkill(now, far)
+    local order, near = JutsuRadar.order, JutsuRadar.near
+    if not order then return end
+    for i = 1, #order do
+        local pn = order[i]
+        local d = near[pn]
+        if not d or d > JUTSU_RANGE then break end
+        if d <= JUTSU_NEAR or far then
+            pcall(checkPlayerCurrentSkill, pn, now)
+            budgetYield()
+        end
+    end
+end
+
+local function sectionMobs(now)
+    if not S.bl_jutsu_mobs then return end
+    local cands = mobCands
+    local checked = 0
+    for i = 1, #cands do
+        if checked >= JUTSU_MOB_MAX then break end
+        local c = cands[i]
+        if c.dist > JUTSU_MOB_RANGE then break end
+        if c.model then
+            checked = checked + 1
+            pcall(checkMobSkill, c, now)
+            budgetYield()
+        end
+    end
+end
+
+local function sectionPurge(now)
+    for key, cast in pairs(JutsuRadar.activeCasts) do
+        if now >= cast.expireTime then
+            JutsuRadar.activeCasts[key] = nil
+        end
+    end
+end
+
+local tickCount = 0
+local function updateActiveCasts()
+    if not S.bl_jutsu_tag then
+        if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
+        return
+    end
+
+    tickCount = tickCount + 1
+    local far = (tickCount % 4 == 0)
+    local now = os.clock()
+
+    local ok0, e0 = pcall(refreshPlayers, now)
+    if not ok0 then logDebug("Jutsu players error: " .. tostring(e0)) end
+    local ok2, e2 = pcall(sectionCurrentSkill, now, far)
+    if not ok2 then logDebug("Jutsu skill error: " .. tostring(e2)) end
+    if S.bl_jutsu_cd then
+        local ok1, e1 = pcall(sectionCooldowns, os.clock())
+        if not ok1 then logDebug("Jutsu cooldown error: " .. tostring(e1)) end
+    end
+    if tickCount % 3 == 0 then
+        local ok3, e3 = pcall(sectionMobs, os.clock())
+        if not ok3 then logDebug("Jutsu mob error: " .. tostring(e3)) end
+    end
+    sectionPurge(os.clock())
 end
 
 task.spawn(function()
     while alive() do
-        local ok, err = pcall(animStep)
-        if not ok then
-            animLiveData = nil
-            logDebug("Anim step error: " .. tostring(err))
+        sliceStart = os.clock()
+        local ok, err = pcall(updateActiveCasts)
+        if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
+
+        local delay = CYCLE_OFF
+        if S.bl_jutsu_tag then
+            if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
+                delay = CYCLE_ACTIVE
+            else
+                delay = CYCLE_IDLE
+            end
         end
-        task.wait(ANIM_INTERVAL)
+        task.wait(delay)
     end
 end)
+end
 
 -- ============================================================
 --  LOOP B: TIME-SLICED COLLECTOR
---  - Walks Workspace in small slices (SCAN_SLICE_BUDGET per frame) instead of one giant
---    blocking pass => no more frame-time spikes / "freezes".
---  - Objects that are not interesting are remembered (negative cache) and skipped for a few
---    seconds, so the expensive FindFirstChild probes are not repeated 3x per second.
---  - Everything the renderer needs is resolved here, ONCE.
+--  Wrapped in do ... end so its locals are released when the block closes (keeps the main
+--  chunk under the 200-local limit). The renderer only reads the published tables.
 -- ============================================================
+do
 local RARE_FILTER_KEY = {
     ["Life Up Fruit"]          = "bl_r_life",
     ["Fruit of Forgetfulness"] = "bl_r_forg",
@@ -1242,9 +1490,10 @@ end
 -- Per-pass state (assigned at the start of every pass, read by processObject)
 local P_now, P_myPos, P_myName = 0, Vector3.new(0, 0, 0), ""
 local P_playerNames, P_playerChars = {}, {}
-local P_freshAnim, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshItems = {}, {}, {}, {}, {}
-local P_liveItemAddrs, P_liveBeastKeys = {}, {}
+local P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems = {}, {}, {}, {}, {}, {}
+local P_liveItemAddrs, P_liveBeastKeys, P_livePumpkinKeys, P_liveRiftAddrs = {}, {}, {}, {}
 local P_freshBeastTamer = nil
+local P_needMobs = false
 
 local function findItemPos(obj, cname)
     local p = obj.Position
@@ -1256,17 +1505,55 @@ local function findItemPos(obj, cname)
 end
 
 local function addWorldBoss(obj, objName, addr)
-    if not S.bl_anim_en then return end
+    if not P_needMobs then return end
     local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
     local hum = obj:FindFirstChildOfClass("Humanoid")
     if root and hum and isAliveHum(hum) then
         local okP, rp = pcall(getPosOf, root)
         local d = (okP and isValidVec3(rp)) and (P_myPos - rp).Magnitude or 1e9
         if d ~= d then d = 1e9 end
-        P_freshAnim[#P_freshAnim + 1] = {
-            name = objName, model = obj, root = root, hum = hum,
-            isBoss = true, isPlayer = false, dist = d, addr = addr,
+        P_freshCands[#P_freshCands + 1] = {
+            name = objName, model = obj, root = root, hum = hum, dist = d, addr = addr,
         }
+    end
+end
+
+local function processRift(rift)
+    if not rift then return end
+    local rName = tostring(rift.Name or "")
+    if rName == "Unstable Rift" or string.find(rName, "Unstable Rift") then return end
+
+    local p = nil
+    if rift:IsA("BasePart") then
+        local ok, pos = pcall(function() return rift.Position end)
+        if ok and pos then p = pos end
+    elseif rift:IsA("Model") then
+        local bp = rift.PrimaryPart or rift:FindFirstChildWhichIsA("BasePart")
+        if bp then
+            local ok, pos = pcall(function() return bp.Position end)
+            if ok and pos then p = pos end
+        end
+    end
+    if not p or not isValidVec3(p) then return end
+
+    local dist = (P_myPos - p).Magnitude
+    local addr = rift.Address or tostring(p)
+    local isSasuke = (string.find(rName, "Sasuke") ~= nil or string.find(rName, "Portal") ~= nil)
+
+    P_freshRifts[#P_freshRifts + 1] = {
+        inst = rift,
+        pos = p,
+        dist = dist,
+        name = rName,
+        addr = addr,
+        isSasuke = isSasuke,
+    }
+    P_liveRiftAddrs[addr] = true
+    if not notifiedRifts[addr] then
+        notifiedRifts[addr] = true
+        if S.bl_rift_notify then
+            notify("HALLOWEEN EVENT ALERT!", string.format("%s spawned! [%dm away]", rName, floor(dist)), 10)
+        end
     end
 end
 
@@ -1274,12 +1561,30 @@ end
 -- bad/despawned instance can never abort the whole pass.
 local function processObject(obj)
     local cname = obj.ClassName
+    local objName = tostring(obj.Name or "")
+
+    -- 0. EVENT RIFTS & PORTALS (Debris or loose in Workspace)
+    if objName == "Debris" and (cname == "Folder" or cname == "Model") then
+        for _, child in ipairs(obj:GetChildren()) do
+            local cName = tostring(child.Name or "")
+            if string.find(cName, "Sasuke") or (string.find(cName, "Portal") and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
+                pcall(processRift, child)
+            end
+        end
+        return
+    end
+
+    if string.find(objName, "Sasuke") or (string.find(objName, "Portal") and objName ~= "Portal" and objName ~= "Portal2" and objName ~= "ShukakuPortal") then
+        if cname == "MeshPart" or cname == "Part" or cname == "Model" then
+            pcall(processRift, obj)
+            return
+        end
+    end
+
     if cname == "Part" or cname == "WedgePart" or cname == "CornerWedgePart"
         or cname == "TrussPart" or cname == "Terrain" or cname == "Folder" or cname == "Camera" then
         return
     end
-
-    local objName = tostring(obj.Name or "")
     if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then return end
     if P_playerNames[objName] then return end   -- player characters are handled via Players
 
@@ -1310,8 +1615,8 @@ local function processObject(obj)
         return
     end
 
-    -- 1. CORRUPTED POINT
-    if objName == "CorruptedPoint" and isModel then
+    -- 1. CORRUPTED POINT & EVENT CORRUPTION POINT (PumpkinPoint)
+    if (objName == "CorruptedPoint" or objName == "PumpkinPoint") and isModel then
         local dest = obj:FindFirstChild("Destroyed")
         local isDestroyed = dest and dest.Value == true
         if not (S.bl_corrupt_dest and isDestroyed) then
@@ -1319,9 +1624,28 @@ local function processObject(obj)
             if main then
                 local okP, p = pcall(getPosOf, main)
                 if okP and isValidVec3(p) then
+                    local isPumpkin = (objName == "PumpkinPoint")
+                    local hpVal = obj:FindFirstChild("Health")
+                    local hpNum = (hpVal and hpVal:IsA("ValueBase")) and hpVal.Value or nil
                     P_freshCorrupt[#P_freshCorrupt + 1] = {
-                        pos = p, isDestroyed = isDestroyed, dist = (P_myPos - p).Magnitude,
+                        model = obj,
+                        hpVal = hpVal,
+                        hp = hpNum,
+                        pos = p,
+                        isDestroyed = isDestroyed,
+                        dist = (P_myPos - p).Magnitude,
+                        name = isPumpkin and "Pumpkin Point" or "Corrupted Point",
+                        isPumpkin = isPumpkin,
                     }
+                    if isPumpkin then
+                        P_livePumpkinKeys[addr] = true
+                        if not notifiedPumpkin[addr] then
+                            notifiedPumpkin[addr] = true
+                            if S.bl_ev_pumpkin then
+                                notify("EVENT ALERT!", string.format("Pumpkin Point! [%dm away]", floor((P_myPos - p).Magnitude)), 8)
+                            end
+                        end
+                    end
                 end
             end
         end
@@ -1446,11 +1770,9 @@ local function processObject(obj)
     if d ~= d then d = 1e9 end
 
     if isCombat then
-        local isBossMob = (maxHp > 500) or (string.find(objName, "Knight", 1, true) ~= nil) or (string.find(objName, "Boss", 1, true) ~= nil)
-        if S.bl_anim_en then
-            P_freshAnim[#P_freshAnim + 1] = {
-                name = cleanName, model = obj, root = root, hum = hum,
-                isBoss = isBossMob, isPlayer = false, dist = d, addr = addr,
+        if P_needMobs then
+            P_freshCands[#P_freshCands + 1] = {
+                name = cleanName, model = obj, root = root, hum = hum, dist = d, addr = addr,
             }
         end
         P_freshMobs[#P_freshMobs + 1] = { root = root, hum = hum, name = cleanName, maxHp = maxHp, dist = d }
@@ -1459,11 +1781,10 @@ local function processObject(obj)
     end
 end
 
--- Chakra Sense scanner. Uses the character map built from Players instead of
--- Workspace:FindFirstChild(name), which walked the ENTIRE Workspace once per player per pass.
+-- Chakra Sense scanner
 local cdFolderCache = nil
 local function scanChakra()
-    local fresh = {}
+    local freshChakra = {}
     if S.bl_cs_en then
         if not cdFolderCache then
             cdFolderCache = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
@@ -1480,7 +1801,7 @@ local function scanChakra()
                     local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
                     local isCasting = (torso and torso:FindFirstChild("ChakraSense") ~= nil) or false
 
-                    fresh[#fresh + 1] = { name = pName, isCasting = isCasting }
+                    freshChakra[#freshChakra + 1] = { name = pName, isCasting = isCasting }
 
                     if not notifiedChakraUsers[pName] then
                         notifiedChakraUsers[pName] = true
@@ -1511,19 +1832,19 @@ local function scanChakra()
         end
     end
 
-    -- Build the HUD strings ONCE per pass; the renderer only compares them
-    local n = #fresh
+    -- Build Chakra Sense HUD strings once per pass
+    local n = #freshChakra
     local text, title = "", ""
     if n > 0 then
         local lines = {}
         for i = 1, n do
-            local u = fresh[i]
+            local u = freshChakra[i]
             lines[i] = string.format(" %s: %s", u.name, u.isCasting and "[CASTING NOW!]" or "[Idle]")
         end
         text  = table.concat(lines, "\n")
         title = string.format("[Chakra Sense Radar (%d)]", n)
     end
-    trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = fresh, text, title, n
+    trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = freshChakra, text, title, n
 end
 
 local function runScanPass()
@@ -1542,36 +1863,21 @@ local function runScanPass()
     P_myPos      = lastMyPos
     P_myName     = lp and lp.Name or ""
     P_playerNames, P_playerChars = {}, {}
-    P_freshAnim, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshItems = {}, {}, {}, {}, {}
-    P_liveItemAddrs, P_liveBeastKeys = {}, {}
+    P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems = {}, {}, {}, {}, {}, {}
+    P_liveItemAddrs, P_liveBeastKeys, P_livePumpkinKeys, P_liveRiftAddrs = {}, {}, {}, {}
     P_freshBeastTamer = nil
 
-    local animOn = S.bl_anim_en
+    -- mob candidates are only needed by the jutsu tags above mobs / bosses
+    P_needMobs = (S.bl_jutsu_tag and S.bl_jutsu_mobs) and true or false
 
-    -- Players (anim candidates + name filter + character map for Chakra Sense)
+    -- Players (name filter + character map for Chakra Sense)
     local pList = Players:GetPlayers()
     for i = 1, #pList do
         local p = pList[i]
         if p then
             local pn = tostring(p.Name or "")
             P_playerNames[pn] = true
-            local pChar = p.Character
-            P_playerChars[pn] = pChar
-            if animOn and p ~= lp and pChar then
-                local pRoot = pChar:FindFirstChild("HumanoidRootPart") or pChar:FindFirstChild("Torso")
-                local pHum  = pChar:FindFirstChildOfClass("Humanoid")
-                if pRoot and pHum and isAliveHum(pHum) then
-                    local okR, rp = pcall(getPosOf, pRoot)
-                    if okR and isValidVec3(rp) then
-                        local d = (P_myPos - rp).Magnitude
-                        if d ~= d then d = 1e9 end
-                        P_freshAnim[#P_freshAnim + 1] = {
-                            name = pn, model = pChar, root = pRoot, hum = pHum,
-                            isBoss = false, isPlayer = true, dist = d, addr = safeAddr(pChar),
-                        }
-                    end
-                end
-            end
+            P_playerChars[pn] = p.Character
         end
     end
 
@@ -1603,51 +1909,25 @@ local function runScanPass()
     table.sort(P_freshMobs, byDist)
     table.sort(P_freshNPCs, byDist)
     table.sort(P_freshCorrupt, byDist)
+    table.sort(P_freshRifts, function(a, b)
+        if a.isSasuke ~= b.isSasuke then return a.isSasuke end
+        return a.dist < b.dist
+    end)
     table.sort(P_freshItems, itemLess)
-    table.sort(P_freshAnim, byDist)
+    table.sort(P_freshCands, byDist)
     capList(P_freshNPCs, NPC_POOL_SIZE)
     capList(P_freshCorrupt, CORRUPT_POOL_SIZE)
+    capList(P_freshRifts, RIFT_POOL_SIZE)
     capList(P_freshItems, ITEM_LIST_CAP)
 
-    -- Resolve active animation target
-    local newTarget = nil
-    if animOn then
-        if S.bl_anim_self then
-            local myHum = lpChar and lpChar:FindFirstChildOfClass("Humanoid")
-            if lpChar and lpRoot and myHum and isAliveHum(myHum) then
-                newTarget = {
-                    name = "You (" .. P_myName .. ")", model = lpChar, root = lpRoot, hum = myHum,
-                    isBoss = false, isPlayer = true, isSelf = true, dist = 0, addr = safeAddr(lpChar),
-                }
-            end
-        elseif animLockedTarget and animLockedTarget.model and animLockedTarget.hum and isAliveHum(animLockedTarget.hum) then
-            newTarget = animLockedTarget
-            local okR, rp = pcall(getPosOf, animLockedTarget.root)
-            if okR and isValidVec3(rp) then
-                animLockedTarget.dist = (P_myPos - rp).Magnitude
-            end
-        else
-            animLockedTarget = nil
-            local targetPlayers = S.bl_anim_players
-            local chosen = nil
-            for i = 1, #P_freshAnim do
-                local c = P_freshAnim[i]
-                if targetPlayers and c.isPlayer then chosen = c; break
-                elseif not targetPlayers and not c.isPlayer then chosen = c; break end
-            end
-            newTarget = chosen or P_freshAnim[1]
-        end
-    end
-
-    -- Drop per-target caches of things that no longer exist
+    -- Drop per-mob caches of things that no longer exist
     local liveAddrs = {}
-    for i = 1, #P_freshAnim do
-        local a = P_freshAnim[i].addr
+    for i = 1, #P_freshCands do
+        local a = P_freshCands[i].addr
         if a then liveAddrs[a] = true end
     end
-    if newTarget and newTarget.addr then liveAddrs[newTarget.addr] = true end
-    for a in pairs(animAux) do
-        if not liveAddrs[a] then animAux[a] = nil end
+    for a in pairs(mobAux) do
+        if not liveAddrs[a] then mobAux[a] = nil end
     end
 
     -- Housekeeping for notification de-dupe tables
@@ -1656,6 +1936,12 @@ local function runScanPass()
     end
     for k in pairs(notifiedBeastTamer) do
         if not P_liveBeastKeys[k] then notifiedBeastTamer[k] = nil end
+    end
+    for k in pairs(notifiedPumpkin) do
+        if not P_livePumpkinKeys[k] then notifiedPumpkin[k] = nil end
+    end
+    for k in pairs(notifiedRifts) do
+        if not P_liveRiftAddrs[k] then notifiedRifts[k] = nil end
     end
     _G.Bloodline_beastTamerSpawned = (P_freshBeastTamer ~= nil)
 
@@ -1666,11 +1952,11 @@ local function runScanPass()
     end
 
     -- PUBLISH (all at once, so the renderer never sees a half-updated world)
-    animCandidates    = P_freshAnim
-    animActiveTarget  = newTarget
+    mobCands          = P_freshCands
     trackedMobs       = P_freshMobs
     trackedNPCs       = P_freshNPCs
     trackedCorrupt    = P_freshCorrupt
+    trackedRifts      = P_freshRifts
     trackedItems      = P_freshItems
     trackedBeastTamer = P_freshBeastTamer
     drawDirty         = true
@@ -1686,6 +1972,7 @@ task.spawn(function()
         task.wait(SCAN_INTERVAL)
     end
 end)
+end -- end of collector scope
 
 -- ============================================================
 --  LOOP C: RENDERER (RenderStepped)
@@ -1747,8 +2034,6 @@ local function setHud(d, want)
         hudState[d] = want
     end
 end
-
-animHudTitle.Text = "[ ANIMATION TRACKER ]"
 
 local function rebuildDrawLists()
     drawDirty = false
@@ -1884,23 +2169,46 @@ local function drawCorruptEntity(e, c)
     if S.bl_corrupt_box then
         place(e, "box", boxX, boxY)
         sizeIt(e, "box", w, h)
+        local boxCol = c.isPumpkin and Color3.fromRGB(255, 140, 0) or (S.bl_corrupt_col or COL_PURPLE)
+        if e.box.Color ~= boxCol then e.box.Color = boxCol end
         setVis(e, "box", true)
     else
         setVis(e, "box", false)
     end
 
-    local showName, showDist = S.bl_corrupt_name, S.bl_corrupt_dist
-    if showName or showDist then
+    local showName, showHp, showDist = S.bl_corrupt_name, S.bl_corrupt_hp, S.bl_corrupt_dist
+    if showName or showHp or showDist then
         if e.owner ~= c then e.owner = c; e.textAt = 0 end
         if rNow - e.textAt >= TEXT_INTERVAL then
             e.textAt = rNow
-            local label = showName and "Corrupted Point" or ""
-            if showDist then label = label .. " [" .. floor(dist) .. "m]" end
+            local pointName = c.name or (c.isPumpkin and "Pumpkin Point" or "Corrupted Point")
+            local label = showName and pointName or ""
+            if showHp then
+                local curHp = nil
+                if c.hpVal and c.hpVal.Parent then
+                    pcall(function() curHp = c.hpVal.Value end)
+                end
+                if curHp == nil then curHp = c.hp end
+                if curHp ~= nil then
+                    local rawVal = math.clamp(floor(curHp), 0, 100)
+                    local remainingHp = 100 - rawVal
+                    if S.bl_corrupt_progress then
+                        label = (label ~= "" and (label .. " ") or "") .. "[" .. rawVal .. "% Cleared]"
+                    else
+                        label = (label ~= "" and (label .. " ") or "") .. "[" .. remainingHp .. "/100 HP]"
+                    end
+                end
+            end
+            if showDist then
+                label = (label ~= "" and (label .. " ") or "") .. "[" .. floor(dist) .. "m]"
+            end
             if label ~= e.lastText then
                 e.tag.Text = label
                 e.lastText = label
             end
         end
+        local tagCol = c.isPumpkin and Color3.fromRGB(255, 200, 80) or COL_PURP_TXT
+        if e.tag.Color ~= tagCol then e.tag.Color = tagCol end
         place(e, "tag", floor(sp.X), boxY - 16)
         setVis(e, "tag", true)
     else
@@ -1921,6 +2229,83 @@ local function renderCorrupt()
         end
     end
     for i = count + 1, CORRUPT_POOL_SIZE do hideCorruptSlot(corruptPool[i]) end
+end
+
+-- ---------------- EVENT RIFTS ----------------
+local function drawRiftEntity(e, r)
+    local pos = r.pos
+    local dist = (rCamPos - pos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, pos)
+    if not okS or not onScreen or not isValidVec2(sp) then return false end
+
+    local rawH = (6.0 / (dist * rTan)) * rVpH
+    if not isValidNum(rawH) then return false end
+
+    local h = clamp(floor(rawH), 18, 450)
+    local w = clamp(floor(h * 0.8), 12, 350)
+    local boxX = floor(sp.X - floor(w * 0.5))
+    local boxY = floor(sp.Y - floor(h * 0.5))
+
+    e.isShown = true
+
+    local riftCol = S.bl_rift_col or Color3.fromRGB(255, 60, 20)
+    local tagCol  = Color3.fromRGB(255, 195, 60)
+
+    if S.bl_rift_box then
+        place(e, "box", boxX, boxY)
+        sizeIt(e, "box", w, h)
+        if e.box.Color ~= riftCol then e.box.Color = riftCol end
+        setVis(e, "box", true)
+    else
+        setVis(e, "box", false)
+    end
+
+    local showName, showDist = S.bl_rift_name, S.bl_rift_dist
+    if showName or showDist then
+        if e.owner ~= r then e.owner = r; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = showName and ("🎃 " .. (r.name or "Event Portal") .. " 🎃") or ""
+            if showDist then
+                label = (label ~= "" and (label .. " ") or "") .. "[" .. floor(dist) .. "m]"
+            end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        if e.tag.Color ~= tagCol then e.tag.Color = tagCol end
+        place(e, "tag", floor(sp.X), boxY - 16)
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+
+    if S.bl_rift_trc and rBotX and rBotY then
+        setLine(e, rBotX, rBotY, floor(sp.X), floor(sp.Y))
+        if e.tracer.Color ~= riftCol then e.tracer.Color = riftCol end
+        setVis(e, "tracer", true)
+    else
+        setVis(e, "tracer", false)
+    end
+
+    return true
+end
+
+local function renderRifts()
+    local count = 0
+    if S.bl_rift_en then
+        local list = trackedRifts
+        count = #list
+        if count > RIFT_POOL_SIZE then count = RIFT_POOL_SIZE end
+        for i = 1, count do
+            local e = riftPool[i]
+            if not drawRiftEntity(e, list[i]) then hideRiftSlot(e) end
+        end
+    end
+    for i = count + 1, RIFT_POOL_SIZE do hideRiftSlot(riftPool[i]) end
 end
 
 -- ---------------- TOWN & FRIENDLY NPCS ----------------
@@ -2101,8 +2486,15 @@ local function drawBeastTamer(bt)
     local boxX = floor(sp.X - w * 0.5)
     local boxY = floor(sp.Y - h * 0.5)
 
-    eventBox.Position = Vector2.new(boxX, boxY)
-    eventBox.Size = Vector2.new(w, h)
+    -- write-on-change (same pattern as the other entities)
+    if evVis.bx ~= boxX or evVis.by ~= boxY then
+        evVis.bx = boxX; evVis.by = boxY
+        eventBox.Position = Vector2.new(boxX, boxY)
+    end
+    if evVis.bw ~= w or evVis.bh ~= h then
+        evVis.bw = w; evVis.bh = h
+        eventBox.Size = Vector2.new(w, h)
+    end
     if not evVis.box then eventBox.Visible = true; evVis.box = true end
 
     if rNow - evTextAt >= TEXT_INTERVAL then
@@ -2113,11 +2505,19 @@ local function drawBeastTamer(bt)
             evLastText = label
         end
     end
-    eventTag.Position = Vector2.new(floor(sp.X), boxY - 18)
+    local tx, ty = floor(sp.X), boxY - 18
+    if evVis.tx ~= tx or evVis.ty ~= ty then
+        evVis.tx = tx; evVis.ty = ty
+        eventTag.Position = Vector2.new(tx, ty)
+    end
     if not evVis.tag then eventTag.Visible = true; evVis.tag = true end
 
-    eventTracer.From = Vector2.new(rBotX, rBotY)
-    eventTracer.To = Vector2.new(floor(sp.X), floor(sp.Y))
+    local sx, sy = floor(sp.X), floor(sp.Y)
+    if evVis.sx ~= sx or evVis.sy ~= sy or evVis.fx ~= rBotX or evVis.fy ~= rBotY then
+        evVis.sx = sx; evVis.sy = sy; evVis.fx = rBotX; evVis.fy = rBotY
+        eventTracer.From = Vector2.new(rBotX, rBotY)
+        eventTracer.To = Vector2.new(sx, sy)
+    end
     if not evVis.tracer then eventTracer.Visible = true; evVis.tracer = true end
     return true
 end
@@ -2129,141 +2529,78 @@ local function renderBeastTamer()
     end
 end
 
--- ---------------- ANIMATION TRACKER HUD + FLOATING TAG ----------------
-local lastAnimData = nil
-local animHudTargetStr, animHudContentStr, animTagStr = "", "", ""
-local lastAnimTargetText, lastAnimContentText, lastAnimTagText = "", "", ""
-local lastHudY = -1
-
-local function rebuildAnimStrings(d)
-    local lockStatus
-    if d.isSelf then
-        lockStatus = "[SELF]"
-    elseif d.isLocked then
-        lockStatus = "[LOCKED (Press T to Cycle)]"
-    else
-        lockStatus = "[NEAREST (Press T to Lock)]"
-    end
-
-    if d.isSelf then
-        animHudTargetStr = string.format(" Target: %s [%.0f/%.0f HP] %s", d.name, d.hp, d.maxHp, lockStatus)
-    else
-        animHudTargetStr = string.format(" Target: %s [%.0f/%.0f HP] (%dm) %s", d.name, d.hp, d.maxHp, floor(d.dist), lockStatus)
-    end
-
-    local lines = {}
-    if d.skill ~= "" or d.guard then
-        lines[#lines + 1] = string.format(" Status: %s%s", (d.skill ~= "" and ("Skill: " .. d.skill .. " ") or ""), (d.guard and "[GUARDING]" or ""))
-    end
-    if #d.tracks > 0 then
-        for idx, t in ipairs(d.tracks) do
-            lines[#lines + 1] = string.format(" > Track %d: ID %s (Time: %.2fs)", idx, t.id, t.time)
+-- ---------------- JUTSU CHANNELING OVERHEAD TAGS ----------------
+-- The root is looked up BY PLAYER NAME every frame (JutsuRadar.roots is refreshed twice a second),
+-- so a respawn / new character can never leave a tag stuck on a dead root. Position/text writes
+-- only happen when the value actually changed.
+local function hideJutsuTags(from)
+    local tags = JutsuRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
         end
-    else
-        lines[#lines + 1] = " > Idle / Moving (No combat tracks)"
-    end
-    animHudContentStr = table.concat(lines, "\n")
-
-    if #d.tracks > 0 then
-        animTagStr = string.format("[Anim: %s (%.2fs)]", d.tracks[1].id, d.tracks[1].time)
-    elseif d.skill ~= "" then
-        animTagStr = string.format("[Skill: %s]", d.skill)
-    else
-        animTagStr = ""
     end
 end
 
-local function renderAnim(chakraShown)
-    local d = animLiveData
-    if not (S.bl_anim_en and d) then
-        setHud(animHudTitle, false)
-        setHud(animHudTarget, false)
-        setHud(animHudContent, false)
-        setHud(animTargetTag, false)
-        lastAnimData = nil
-        return
-    end
-
-    -- Strings are rebuilt only when the worker publishes new data (10x/s), not every frame
-    if d ~= lastAnimData then
-        lastAnimData = d
-        rebuildAnimStrings(d)
-        if S.bl_anim_hud then
-            if animHudTargetStr ~= lastAnimTargetText then
-                animHudTarget.Text = animHudTargetStr
-                lastAnimTargetText = animHudTargetStr
-            end
-            if animHudContentStr ~= lastAnimContentText then
-                animHudContent.Text = animHudContentStr
-                lastAnimContentText = animHudContentStr
-            end
-        end
-    end
-
-    if S.bl_anim_hud then
-        local hudY = chakraShown and 300 or 220
-        if hudY ~= lastHudY then
-            lastHudY = hudY
-            animHudTitle.Position   = Vector2.new(16, hudY)
-            animHudTarget.Position  = Vector2.new(16, hudY + 18)
-            animHudContent.Position = Vector2.new(16, hudY + 36)
-        end
-        -- HUD may have just been switched on: make sure the texts are current
-        if animHudTargetStr ~= lastAnimTargetText then
-            animHudTarget.Text = animHudTargetStr
-            lastAnimTargetText = animHudTargetStr
-        end
-        if animHudContentStr ~= lastAnimContentText then
-            animHudContent.Text = animHudContentStr
-            lastAnimContentText = animHudContentStr
-        end
-        setHud(animHudTitle, true)
-        setHud(animHudTarget, true)
-        setHud(animHudContent, true)
-    else
-        setHud(animHudTitle, false)
-        setHud(animHudTarget, false)
-        setHud(animHudContent, false)
-    end
-
-    local tagShown = false
-    if S.bl_anim_tag and d.root and animTagStr ~= "" then
-        local okP, rPos = pcall(getPosOf, d.root)
-        if okP and isValidVec3(rPos) then
-            local okS, sp, onScreen = pcall(WorldToScreen, rPos)
-            if okS and onScreen and isValidVec2(sp) then
-                local dist = (rCamPos - rPos).Magnitude
-                local rawH = (5.5 / (dist * rTan)) * rVpH
-                if isValidNum(rawH) then
-                    local h = clamp(floor(rawH), 16, 450)
-                    if animTagStr ~= lastAnimTagText then
-                        animTargetTag.Text = animTagStr
-                        lastAnimTagText = animTagStr
+local function renderJutsuTags()
+    local tags = JutsuRadar.tags
+    local count = 0
+    if S.bl_jutsu_tag and next(JutsuRadar.activeCasts) then
+        local maxTags = #tags
+        local roots = JutsuRadar.roots
+        for _, cast in pairs(JutsuRadar.activeCasts) do
+            if count >= maxTags then break end
+            if rNow < cast.expireTime then
+                local root = (cast.who and roots[cast.who]) or cast.root
+                if root then
+                    local okP, rPos = pcall(getPosOf, root)
+                    if okP and isValidVec3(rPos) then
+                        local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                        if okS and onScreen and isValidVec2(sp) then
+                            local dist = (rCamPos - rPos).Magnitude
+                            local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                            if isValidNum(rawH) then
+                                local h = clamp(floor(rawH), 16, 450)
+                                count = count + 1
+                                local t = tags[count]
+                                if t.text ~= cast.label then
+                                    t.tag.Text = cast.label
+                                    t.text = cast.label
+                                end
+                                local tagCol = getJutsuColor(cast.skill)
+                                if t.tag.Color ~= tagCol then t.tag.Color = tagCol end
+                                local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - 20)
+                                if t.x ~= x or t.y ~= y then
+                                    t.x = x; t.y = y
+                                    t.tag.Position = Vector2.new(x, y)
+                                end
+                                if not t.vis then
+                                    t.tag.Visible = true
+                                    t.vis = true
+                                end
+                            end
+                        end
                     end
-                    animTargetTag.Position = Vector2.new(floor(sp.X), floor(sp.Y - floor(h * 0.5) - 32))
-                    setHud(animTargetTag, true)
-                    tagShown = true
                 end
             end
         end
     end
-    if not tagShown then setHud(animTargetTag, false) end
+    hideJutsuTags(count + 1)
 end
 
 -- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
 local function hideAllDrawings()
     for i = 1, MOB_POOL_SIZE do local s = mobPool[i]; s.isShown = true; hideMobSlot(s) end
     for i = 1, CORRUPT_POOL_SIZE do local s = corruptPool[i]; s.isShown = true; hideCorruptSlot(s) end
+    for i = 1, RIFT_POOL_SIZE do local s = riftPool[i]; s.isShown = true; hideRiftSlot(s) end
     for i = 1, NPC_POOL_SIZE do local s = npcPool[i]; s.isShown = true; hideNPCSlot(s) end
     for i = 1, ITEM_POOL_SIZE do local s = itemPool[i]; s.isShown = true; hideItemSlot(s) end
     setHud(csHudTitle, false)
     setHud(csHudContent, false)
-    setHud(animHudTitle, false)
-    setHud(animHudTarget, false)
-    setHud(animHudContent, false)
-    setHud(animTargetTag, false)
     hideEventSlot()
-    lastAnimData = nil
+    hideJutsuTags(1)
 end
 
 local function renderFrame()
@@ -2293,7 +2630,8 @@ local function renderFrame()
     -- Fast-travel flush (>100 studs in one frame)
     if lastCamPos and (camPos - lastCamPos).Magnitude > 100.0 then
         scanEpoch = scanEpoch + 1
-        trackedMobs, trackedCorrupt, trackedNPCs, trackedItems = {}, {}, {}, {}
+        trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
+        mobCands = {}
         drawDirty = true
     end
     lastCamPos = camPos
@@ -2304,19 +2642,20 @@ local function renderFrame()
 
     renderMobs()
     renderCorrupt()
+    renderRifts()
     renderNPCs()
     renderItems()
-    local chakraShown = renderChakraHud()
+    renderChakraHud()
     renderBeastTamer()
-    renderAnim(chakraShown)
+    -- Isolated: an error in the jutsu tags can never blank the ESP
+    local okJ, errJ = pcall(renderJutsuTags)
+    if not okJ then logDebug("Jutsu tag render error: " .. tostring(errJ)) end
 end
 
 _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
     if not alive() then return end
 
-    -- Frame limiter. The old check was `dt < 1/60`, which at a real 60 Hz skipped roughly every
-    -- other frame (dt is often 16.5 ms < 16.67 ms) => the ESP updated at ~30 FPS and looked choppy.
-    -- Now: 15% tolerance and a higher cap, so it follows your display refresh rate.
+    -- Frame limiter: 15% tolerance below the cap so it follows your display refresh rate
     local now = os.clock()
     if (now - lastRenderClock) < MIN_FRAME_TIME then return end
     lastRenderClock = now
@@ -2337,6 +2676,6 @@ _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
     end
 end)
 
-notify("Bloodline ESP", "Smooth Two-Loop Engine Activated!", 4)
+notify("Bloodline ESP", "Merged build activated!", 4)
 logDebug("Bloodline ESP time-sliced engine running.", true)
-print("[Bloodline] Smooth Two-Loop Engine active!")
+print("[Bloodline] Merged build active!")
