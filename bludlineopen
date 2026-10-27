@@ -358,18 +358,38 @@ initUI("f_gloweed", false)
 initUI("f_other", true)
 
 initUI("bl_jutsu_tag", true)
+initUI("bl_jutsu_box", true)
 initUI("bl_jutsu_size", 13)
 initUI("bl_jutsu_self", false)
 initUI("bl_jutsu_mobs", false)
 initUI("bl_jutsu_cd", true)
+initUI("bl_combat_dist", 400)
+initUI("bl_sub_en", true)
+initUI("bl_sub_size", 13)
+initUI("bl_sub_only_cd", true)
+initUI("bl_sub_self", false)
+initUI("bl_iframe_en", true)
+initUI("bl_iframe_size", 13)
+initUI("bl_iframe_self", false)
+initUI("bl_mode_en", true)
+initUI("bl_mode_name", true)
+initUI("bl_mode_dur", true)
+initUI("bl_mode_cd", true)
+initUI("bl_mode_size", 13)
+initUI("bl_mode_self", false)
 
 -- Apply requested defaults
-if UI.GetValue("bl_v8_defaults") ~= true then
+if UI.GetValue("bl_v9_defaults") ~= true then
     UI.SetValue("bl_corrupt_en", true)
     UI.SetValue("bl_corrupt_progress", true)
     UI.SetValue("bl_rift_trc", false)
     UI.SetValue("bl_jutsu_mobs", false)
     UI.SetValue("bl_jutsu_self", false)
+    UI.SetValue("bl_sub_self", false)
+    UI.SetValue("bl_iframe_self", false)
+    UI.SetValue("bl_mode_self", false)
+    UI.SetValue("bl_sub_only_cd", true)
+    UI.SetValue("bl_combat_dist", 400)
     UI.SetValue("bl_npc_box", false)
     UI.SetValue("bl_item_box", false)
     UI.SetValue("bl_ev_beast_esp", false)
@@ -377,7 +397,7 @@ if UI.GetValue("bl_v8_defaults") ~= true then
     UI.SetValue("f_seaweed", false)
     UI.SetValue("f_gloweed", false)
     UI.SetValue("f_common_fruit", true)
-    UI.SetValue("bl_v8_defaults", true)
+    UI.SetValue("bl_v9_defaults", true)
 end
 
 -- ============================================================
@@ -401,7 +421,11 @@ local SETTING_DEFAULTS = {
     {"bl_item_en", true}, {"bl_item_box", false}, {"bl_item_name", true}, {"bl_item_dist", true},
     {"f_common_fruit", true}, {"f_bells", false}, {"f_seaweed", false}, {"f_gloweed", false},
     {"f_other", true},
-    {"bl_jutsu_tag", true}, {"bl_jutsu_size", 13}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
+    {"bl_jutsu_tag", true}, {"bl_jutsu_box", true}, {"bl_jutsu_size", 13}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
+    {"bl_combat_dist", 400},
+    {"bl_sub_en", true}, {"bl_sub_size", 13}, {"bl_sub_only_cd", true}, {"bl_sub_self", false},
+    {"bl_iframe_en", true}, {"bl_iframe_size", 13}, {"bl_iframe_self", false},
+    {"bl_mode_en", true}, {"bl_mode_name", true}, {"bl_mode_dur", true}, {"bl_mode_cd", true}, {"bl_mode_size", 13}, {"bl_mode_self", false},
 }
 
 local function refreshSettings()
@@ -455,12 +479,29 @@ UI.AddTab("Bloodline", function(tab)
     riftSec:Toggle("bl_rift_trc", "Directional Tracer", getUI("bl_rift_trc", false), function(v) UI.SetValue("bl_rift_trc", v) end)
     riftSec:Toggle("bl_rift_notify", "Spawn Alert Notify", getUI("bl_rift_notify", true), function(v) UI.SetValue("bl_rift_notify", v) end)
 
+    local combatSec = tab:Section("Combat Assists", "Left")
+    combatSec:SliderInt("bl_combat_dist", "Combat Assists Range", 50, 1200, getUI("bl_combat_dist", 400), function(val) UI.SetValue("bl_combat_dist", val) end)
+    combatSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", getUI("bl_jutsu_tag", true), function(v) UI.SetValue("bl_jutsu_tag", v) end)
+    combatSec:Toggle("bl_jutsu_box", "Jutsu Background Pill Box", getUI("bl_jutsu_box", true), function(v) UI.SetValue("bl_jutsu_box", v) end)
+    combatSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val) UI.SetValue("bl_jutsu_size", val) end)
+    combatSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", getUI("bl_jutsu_self", false), function(v) UI.SetValue("bl_jutsu_self", v) end)
+    combatSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", getUI("bl_jutsu_mobs", false), function(v) UI.SetValue("bl_jutsu_mobs", v) end)
+    combatSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (heavier, catches instant casts)", getUI("bl_jutsu_cd", true), function(v) UI.SetValue("bl_jutsu_cd", v) end)
+    combatSec:Toggle("bl_sub_en", "Opponent Sub Cooldown Tracker", getUI("bl_sub_en", true), function(v) UI.SetValue("bl_sub_en", v) end)
+    combatSec:SliderInt("bl_sub_size", "Sub Text Size", 8, 36, getUI("bl_sub_size", 13), function(val) UI.SetValue("bl_sub_size", val) end)
+    combatSec:Toggle("bl_sub_only_cd", "Show Subs Only While On CD", getUI("bl_sub_only_cd", true), function(v) UI.SetValue("bl_sub_only_cd", v) end)
+    combatSec:Toggle("bl_sub_self", "Show Own Sub Status", getUI("bl_sub_self", false), function(v) UI.SetValue("bl_sub_self", v) end)
+    combatSec:Toggle("bl_iframe_en", "I-Frame / Invincible Indicator", getUI("bl_iframe_en", true), function(v) UI.SetValue("bl_iframe_en", v) end)
+    combatSec:SliderInt("bl_iframe_size", "I-Frame Text Size", 8, 36, getUI("bl_iframe_size", 13), function(val) UI.SetValue("bl_iframe_size", val) end)
+    combatSec:Toggle("bl_iframe_self", "Show Own I-Frames", getUI("bl_iframe_self", false), function(v) UI.SetValue("bl_iframe_self", v) end)
+    combatSec:Toggle("bl_mode_en", "Awakening / Mode Tracker", getUI("bl_mode_en", true), function(v) UI.SetValue("bl_mode_en", v) end)
+    combatSec:SliderInt("bl_mode_size", "Mode Text Size", 8, 36, getUI("bl_mode_size", 13), function(val) UI.SetValue("bl_mode_size", val) end)
+    combatSec:Toggle("bl_mode_name", "Track Awakened Mode Name", getUI("bl_mode_name", true), function(v) UI.SetValue("bl_mode_name", v) end)
+    combatSec:Toggle("bl_mode_dur", "Track Mode Active Duration", getUI("bl_mode_dur", true), function(v) UI.SetValue("bl_mode_dur", v) end)
+    combatSec:Toggle("bl_mode_cd", "Track Awakening Cooldown", getUI("bl_mode_cd", true), function(v) UI.SetValue("bl_mode_cd", v) end)
+    combatSec:Toggle("bl_mode_self", "Show Own Mode Status", getUI("bl_mode_self", false), function(v) UI.SetValue("bl_mode_self", v) end)
+
     local csSec = tab:Section("Chakra Sense Radar", "Left")
-    csSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", getUI("bl_jutsu_tag", true), function(v) UI.SetValue("bl_jutsu_tag", v) end)
-    csSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val) UI.SetValue("bl_jutsu_size", val) end)
-    csSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", getUI("bl_jutsu_self", false), function(v) UI.SetValue("bl_jutsu_self", v) end)
-    csSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", getUI("bl_jutsu_mobs", false), function(v) UI.SetValue("bl_jutsu_mobs", v) end)
-    csSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (heavier, catches instant casts)", getUI("bl_jutsu_cd", true), function(v) UI.SetValue("bl_jutsu_cd", v) end)
     csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", getUI("bl_cs_en", true), function(v) UI.SetValue("bl_cs_en", v) end)
     csSec:Toggle("bl_cs_notify", "Notify On Detected", getUI("bl_cs_notify", true), function(v) UI.SetValue("bl_cs_notify", v) end)
     csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", getUI("bl_cs_use_notify", true), function(v) UI.SetValue("bl_cs_use_notify", v) end)
@@ -626,16 +667,97 @@ local JutsuRadar = {
     skillLists = {},    -- cached per-player cooldown value lists
 }
 for i = 1, 16 do
+    local box = Drawing.new("Square")
+    box.Filled = true
+    box.Color = Color3.fromRGB(12, 12, 16)
+    box.Transparency = 0.65
+    box.ZIndex = 1
+    box.Visible = false
+
     local tag = Drawing.new("Text")
     tag.Size = 13
     tag.Font = Drawing.Fonts.SystemBold
     tag.Center = true
     tag.Outline = true
     tag.Color = Color3.fromRGB(255, 210, 50)
+    tag.ZIndex = 2
     tag.Visible = false
-    JutsuRadar.tags[i] = { tag = tag, vis = false, text = "", size = 13, x = nil, y = nil }
+    JutsuRadar.tags[i] = {
+        tag = tag, box = box, vis = false, boxVis = false,
+        text = "", size = 13, x = nil, y = nil,
+        bx = nil, by = nil, bw = nil, bh = nil
+    }
 end
 _G.Bloodline_JutsuRadar = JutsuRadar
+
+-- Substitution Cooldown Tracker State (8s duration)
+local SUB_DURATION = 8.0
+local SubRadar = {
+    tags = {},
+    cache = {},     -- [playerName] = SubCooldown instance
+    cacheAt = {},   -- [playerName] = time resolved
+    lastVal = {},   -- [playerName] = last seen SubCooldown value
+    expiresAt = {}, -- [playerName] = timestamp when cooldown expires
+    miss = {},
+}
+for i = 1, 16 do
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = true
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(60, 255, 110)
+    tag.Visible = false
+    SubRadar.tags[i] = { tag = tag, vis = false, text = "", col = nil, size = 13, x = nil, y = nil }
+end
+_G.Bloodline_SubRadar = SubRadar
+
+-- I-Frame / Invincibility Indicator State
+local IFrameRadar = {
+    tags = {},
+    cache = {},     -- [playerName] = Invincible BoolValue instance
+    cacheAt = {},
+}
+for i = 1, 16 do
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = true
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(255, 215, 0)
+    tag.Visible = false
+    IFrameRadar.tags[i] = { tag = tag, vis = false, text = "", col = nil, size = 13, x = nil, y = nil }
+end
+_G.Bloodline_IFrameRadar = IFrameRadar
+
+-- Awakening / Mode Tracker State
+local function getCleanModeName(raw)
+    if not raw or raw == "" then return "" end
+    for i = 1, #raw do
+        local b = string.byte(raw, i)
+        if b < 32 or b > 126 then
+            return "Mode"
+        end
+    end
+    return raw
+end
+
+local ModeRadar = {
+    tags = {},
+    cache = {},     -- [playerName] = { awk = StringValue, cd = NumberValue }
+    cacheAt = {},
+}
+for i = 1, 16 do
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = true
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(205, 80, 255)
+    tag.Visible = false
+    ModeRadar.tags[i] = { tag = tag, vis = false, text = "", col = nil, size = 13, x = nil, y = nil }
+end
+_G.Bloodline_ModeRadar = ModeRadar
 
 -- Shadow visibility flags: we never READ .Visible from a Drawing; we remember what we last
 -- wrote and only write on change.
@@ -755,9 +877,32 @@ _G.Bloodline_cleanup = function()
 
     if _G.Bloodline_JutsuRadar and _G.Bloodline_JutsuRadar.tags then
         for i = 1, #_G.Bloodline_JutsuRadar.tags do
-            pcall(function() _G.Bloodline_JutsuRadar.tags[i].tag:Remove() end)
+            local it = _G.Bloodline_JutsuRadar.tags[i]
+            pcall(function() it.tag:Remove() end)
+            if it.box then pcall(function() it.box:Remove() end) end
         end
         _G.Bloodline_JutsuRadar = nil
+    end
+
+    if _G.Bloodline_SubRadar and _G.Bloodline_SubRadar.tags then
+        for i = 1, #_G.Bloodline_SubRadar.tags do
+            pcall(function() _G.Bloodline_SubRadar.tags[i].tag:Remove() end)
+        end
+        _G.Bloodline_SubRadar = nil
+    end
+
+    if _G.Bloodline_IFrameRadar and _G.Bloodline_IFrameRadar.tags then
+        for i = 1, #_G.Bloodline_IFrameRadar.tags do
+            pcall(function() _G.Bloodline_IFrameRadar.tags[i].tag:Remove() end)
+        end
+        _G.Bloodline_IFrameRadar = nil
+    end
+
+    if _G.Bloodline_ModeRadar and _G.Bloodline_ModeRadar.tags then
+        for i = 1, #_G.Bloodline_ModeRadar.tags do
+            pcall(function() _G.Bloodline_ModeRadar.tags[i].tag:Remove() end)
+        end
+        _G.Bloodline_ModeRadar = nil
     end
 
     if _G.Bloodline_eventBox then
@@ -909,7 +1054,7 @@ local JUTSU_COLORS = {
     CHAKRA    = Color3.fromRGB(30, 240, 220),  -- Spiritual Soul Turquoise / Cyan (Chakra)
     HEALING   = Color3.fromRGB(60, 255, 110),  -- Luminous Emerald Green (Healing)
     CLONE     = Color3.fromRGB(255, 195, 60),  -- Golden Amber (Clone)
-    GENJUTSU  = Color3.fromRGB(55, 55, 65),    -- Dark Raven Charcoal Black (Genjutsu)
+    GENJUTSU  = Color3.fromRGB(150, 50, 205),   -- Deep Amethyst / Dark Violet Purple (Genjutsu)
     WOOD      = Color3.fromRGB(75, 160, 55),   -- Deep Forest Timber Olive (Wood)
     ICE       = Color3.fromRGB(210, 245, 255), -- Crystalline Glacial Frost White (Ice)
     SAND      = Color3.fromRGB(225, 185, 115), -- Desert Dune Tan/Khaki (Sand)
@@ -1090,8 +1235,8 @@ local JUTSU_MOB_RANGE  = 120
 local JUTSU_MOB_MAX    = 5
 local PLAYER_REFRESH   = 0.5
 local CS_RECHECK       = 15
-local CD_PLAYERS_MAX   = 4      -- cooldown scan only for the N nearest players
-local CD_PER_CYCLE     = 4      -- scan all eligible nearest players every cycle
+local CD_PLAYERS_MAX   = 8      -- cooldown scan only for the N nearest players
+local CD_PER_CYCLE     = 8      -- scan all eligible nearest players every cycle
 local FRAME_BUDGET     = 0.0010 -- seconds of detector work per frame before yielding
 local CYCLE_ACTIVE     = 0.12
 local CYCLE_IDLE       = 0.30
@@ -1109,7 +1254,7 @@ end
 function setCast(key, skill, ttl, root, who)
     local now = os.clock()
     local lp = Players.LocalPlayer
-    local isSelf = (who and lp and who == lp.Name) or (who == P_myName)
+    local isSelf = (who and lp and who == lp.Name)
     local prefix = isSelf and "[SELF] " or ""
     local c = JutsuRadar.activeCasts[key]
     if c and c.skill == skill then
@@ -1154,13 +1299,14 @@ local function refreshPlayers(now)
         if p then
             local pn = tostring(p.Name or "")
             names[pn] = true
-            if p ~= lp or S.bl_jutsu_self then
+            if p ~= lp or S.bl_jutsu_self or S.bl_sub_self or S.bl_iframe_self or S.bl_mode_self then
                 local root = rootOf(p.Character)
                 if root then
                     local okR, rp = pcall(getPosOf, root)
                     if okR and isValidVec3(rp) then
                         local d = (myPos - rp).Magnitude
-                        if d == d and (d <= JUTSU_RANGE or p == lp) then
+                        local maxCombatDist = S.bl_combat_dist or 400
+                        if d == d and (d <= maxCombatDist or p == lp) then
                             roots[pn] = root
                             near[pn] = d
                             order[#order + 1] = pn
@@ -1187,6 +1333,27 @@ local function refreshPlayers(now)
             JutsuRadar.csCache[n] = nil
             JutsuRadar.csCacheAt[n] = nil
             JutsuRadar.csMiss[n] = nil
+        end
+    end
+    for n in pairs(SubRadar.cache) do
+        if not names[n] then
+            SubRadar.cache[n] = nil
+            SubRadar.cacheAt[n] = nil
+            SubRadar.lastVal[n] = nil
+            SubRadar.expiresAt[n] = nil
+            SubRadar.miss[n] = nil
+        end
+    end
+    for n in pairs(IFrameRadar.cache) do
+        if not names[n] then
+            IFrameRadar.cache[n] = nil
+            IFrameRadar.cacheAt[n] = nil
+        end
+    end
+    for n in pairs(ModeRadar.cache) do
+        if not names[n] then
+            ModeRadar.cache[n] = nil
+            ModeRadar.cacheAt[n] = nil
         end
     end
 end
@@ -1327,11 +1494,12 @@ local function sectionCooldowns(now)
 
     local order, near = JutsuRadar.order, JutsuRadar.near
     if not order then return end
+    local maxDist = S.bl_combat_dist or 400
     local n = 0
     for i = 1, #order do
         local pn = order[i]
         local d = near[pn]
-        if not d or d > JUTSU_NEAR or n >= CD_PLAYERS_MAX then break end
+        if not d or d > maxDist or n >= CD_PLAYERS_MAX then break end
         n = n + 1
         eligBuf[n] = pn
     end
@@ -1356,11 +1524,13 @@ end
 local function sectionCurrentSkill(now, far)
     local order, near = JutsuRadar.order, JutsuRadar.near
     if not order then return end
+    local maxDist = S.bl_combat_dist or 400
+    local nearDist = maxDist * 0.5
     for i = 1, #order do
         local pn = order[i]
         local d = near[pn]
-        if not d or d > JUTSU_RANGE then break end
-        if d <= JUTSU_NEAR or far then
+        if not d or d > maxDist then break end
+        if d <= nearDist or far then
             pcall(checkPlayerCurrentSkill, pn, now)
             budgetYield()
         end
@@ -1393,7 +1563,8 @@ end
 
 local tickCount = 0
 local function updateActiveCasts()
-    if not S.bl_jutsu_tag then
+    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en
+    if not combatActive then
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
         return
     end
@@ -1404,15 +1575,20 @@ local function updateActiveCasts()
 
     local ok0, e0 = pcall(refreshPlayers, now)
     if not ok0 then logDebug("Jutsu players error: " .. tostring(e0)) end
-    local ok2, e2 = pcall(sectionCurrentSkill, now, far)
-    if not ok2 then logDebug("Jutsu skill error: " .. tostring(e2)) end
-    if S.bl_jutsu_cd then
-        local ok1, e1 = pcall(sectionCooldowns, os.clock())
-        if not ok1 then logDebug("Jutsu cooldown error: " .. tostring(e1)) end
-    end
-    if tickCount % 3 == 0 then
-        local ok3, e3 = pcall(sectionMobs, os.clock())
-        if not ok3 then logDebug("Jutsu mob error: " .. tostring(e3)) end
+
+    if S.bl_jutsu_tag then
+        local ok2, e2 = pcall(sectionCurrentSkill, now, far)
+        if not ok2 then logDebug("Jutsu skill error: " .. tostring(e2)) end
+        if S.bl_jutsu_cd then
+            local ok1, e1 = pcall(sectionCooldowns, os.clock())
+            if not ok1 then logDebug("Jutsu cooldown error: " .. tostring(e1)) end
+        end
+        if tickCount % 3 == 0 then
+            local ok3, e3 = pcall(sectionMobs, os.clock())
+            if not ok3 then logDebug("Jutsu mob error: " .. tostring(e3)) end
+        end
+    else
+        if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
     end
     sectionPurge(os.clock())
 end
@@ -1424,7 +1600,7 @@ task.spawn(function()
         if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
 
         local delay = CYCLE_OFF
-        if S.bl_jutsu_tag then
+        if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en then
             if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
                 delay = CYCLE_ACTIVE
             else
@@ -1617,8 +1793,12 @@ local function processObject(obj)
         return
     end
 
-    -- 1. CORRUPTED POINT & EVENT CORRUPTION POINT (PumpkinPoint)
-    if (objName == "CorruptedPoint" or objName == "PumpkinPoint") and isModel then
+    -- 1. CORRUPTED POINT & EVENT CORRUPTION POINT (Pumpkin / PumpkinPoint / CorruptedPoint)
+    local isCorruptCandidate = isModel and (
+        objName == "CorruptedPoint" or objName == "PumpkinPoint" or string.find(objName, "Pumpkin") ~= nil
+        or (obj:FindFirstChild("Health") and obj:FindFirstChild("Destroyed"))
+    )
+    if isCorruptCandidate then
         local dest = obj:FindFirstChild("Destroyed")
         local isDestroyed = dest and dest.Value == true
         if not (S.bl_corrupt_dest and isDestroyed) then
@@ -1626,7 +1806,7 @@ local function processObject(obj)
             if main then
                 local okP, p = pcall(getPosOf, main)
                 if okP and isValidVec3(p) then
-                    local isPumpkin = (objName == "PumpkinPoint")
+                    local isPumpkin = (string.find(objName, "Pumpkin") ~= nil)
                     local hpVal = obj:FindFirstChild("Health")
                     local hpNum = (hpVal and hpVal:IsA("ValueBase")) and hpVal.Value or nil
                     P_freshCorrupt[#P_freshCorrupt + 1] = {
@@ -1850,6 +2030,7 @@ local function scanChakra()
 end
 
 local function runScanPass()
+    _G.Bloodline_scanPassCount = (_G.Bloodline_scanPassCount or 0) + 1
     local startEpoch = scanEpoch
     refreshSettings()
 
@@ -2535,6 +2716,7 @@ end
 -- The root is looked up BY PLAYER NAME every frame (JutsuRadar.roots is refreshed twice a second),
 -- so a respawn / new character can never leave a tag stuck on a dead root. Position/text writes
 -- only happen when the value actually changed.
+local tagOffsets = {}
 local function hideJutsuTags(from)
     local tags = JutsuRadar.tags
     for i = from, #tags do
@@ -2542,6 +2724,10 @@ local function hideJutsuTags(from)
         if t.vis then
             t.tag.Visible = false
             t.vis = false
+        end
+        if t.boxVis then
+            t.box.Visible = false
+            t.boxVis = false
         end
     end
 end
@@ -2552,6 +2738,7 @@ local function renderJutsuTags()
     if S.bl_jutsu_tag and next(JutsuRadar.activeCasts) then
         local maxTags = #tags
         local roots = JutsuRadar.roots
+        local showBox = S.bl_jutsu_box
         for _, cast in pairs(JutsuRadar.activeCasts) do
             if count >= maxTags then break end
             if rNow < cast.expireTime then
@@ -2578,7 +2765,11 @@ local function renderJutsuTags()
                                     t.tag.Size = tagSize
                                     t.size = tagSize
                                 end
-                                local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - 20)
+                                local who = cast.who
+                                local curOff = (who and tagOffsets[who]) or 20
+                                local jutsuStep = math.floor(tagSize + (showBox and 8 or 2) + 6)
+                                if who then tagOffsets[who] = curOff + jutsuStep end
+                                local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - curOff)
                                 if t.x ~= x or t.y ~= y then
                                     t.x = x; t.y = y
                                     t.tag.Position = Vector2.new(x, y)
@@ -2586,6 +2777,29 @@ local function renderJutsuTags()
                                 if not t.vis then
                                     t.tag.Visible = true
                                     t.vis = true
+                                end
+
+                                if showBox then
+                                    local textLen = #cast.label
+                                    local charW = math.max(tagSize * 0.58, 7.0)
+                                    local textWidth = math.max(textLen * charW, 36)
+                                    local padX = math.floor(tagSize * 0.30) + 3
+                                    local bw = floor(textWidth + padX * 2)
+                                    local bh = floor(tagSize + 5)
+                                    local bx = floor(x - bw * 0.5)
+                                    local by = floor(y - bh * 0.5)
+                                    if t.bx ~= bx or t.by ~= by or t.bw ~= bw or t.bh ~= bh then
+                                        t.bx = bx; t.by = by; t.bw = bw; t.bh = bh
+                                        t.box.Size = Vector2.new(bw, bh)
+                                        t.box.Position = Vector2.new(bx, by)
+                                    end
+                                    if not t.boxVis then
+                                        t.box.Visible = true
+                                        t.boxVis = true
+                                    end
+                                elseif t.boxVis then
+                                    t.box.Visible = false
+                                    t.boxVis = false
                                 end
                             end
                         end
@@ -2595,6 +2809,358 @@ local function renderJutsuTags()
         end
     end
     hideJutsuTags(count + 1)
+end
+
+local function hideSubTags(from)
+    local tags = SubRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
+        end
+    end
+end
+
+local function renderSubTags()
+    local tags = SubRadar.tags
+    local count = 0
+    if S.bl_sub_en and JutsuRadar.order then
+        local order = JutsuRadar.order
+        local roots = JutsuRadar.roots
+        local near = JutsuRadar.near
+        local activeCasts = JutsuRadar.activeCasts
+        local maxTags = #tags
+        local curEpoch = os.time()
+        local subTagSize = S.bl_sub_size or 13
+        local lp = Players.LocalPlayer
+        local myName = lp and lp.Name
+
+        local maxDist = S.bl_combat_dist or 400
+        for i = 1, #order do
+            if count >= maxTags then break end
+            local pn = order[i]
+            local d = near[pn]
+            if not d or d > maxDist then break end
+            local isSelf = (myName and pn == myName) or (lp and pn == lp.Name)
+            if isSelf and not S.bl_sub_self then
+                -- skip self if not enabled
+            else
+                local root = roots[pn]
+                if root then
+                    local sc = SubRadar.cache[pn]
+                    if not sc or (rNow - (SubRadar.cacheAt[pn] or 0)) > 15 then
+                        local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+                        local f = rsSettings and rsSettings:FindFirstChild(pn)
+                        sc = f and f:FindFirstChild("SubCooldown")
+                        SubRadar.cache[pn] = sc
+                        SubRadar.cacheAt[pn] = rNow
+                    end
+
+                    if sc then
+                        local okV, subVal = pcall(getValue, sc)
+                        if okV and type(subVal) == "number" then
+                            local lastTs = SubRadar.lastVal[pn]
+                            if lastTs == nil then
+                                -- Initial baseline for this player
+                                SubRadar.lastVal[pn] = subVal
+                            elseif subVal > 0 and subVal > lastTs then
+                                -- A higher timestamp was written by the server: FRESH SUB ACTIVATION!
+                                SubRadar.lastVal[pn] = subVal
+                                SubRadar.expiresAt[pn] = rNow + SUB_DURATION
+                            elseif subVal <= 0 then
+                                -- Stun / lock / reset state
+                                SubRadar.expiresAt[pn] = nil
+                            end
+
+                            local exp = SubRadar.expiresAt[pn]
+                            local label, col
+                            if exp and rNow < exp then
+                                local secLeft = math.ceil(exp - rNow)
+                                label = "[SUB: " .. tostring(secLeft) .. "s]"
+                                col = Color3.fromRGB(255, 75, 75)
+                            elseif not S.bl_sub_only_cd then
+                                label = "[SUB READY]"
+                                col = Color3.fromRGB(60, 255, 110)
+                            end
+
+                            if label then
+                                local okP, rPos = pcall(getPosOf, root)
+                                if okP and isValidVec3(rPos) then
+                                    local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                                    if okS and onScreen and isValidVec2(sp) then
+                                        local dist = (rCamPos - rPos).Magnitude
+                                        local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                                        if isValidNum(rawH) then
+                                            local h = clamp(floor(rawH), 16, 450)
+                                            count = count + 1
+                                            local t = tags[count]
+
+                                            if t.text ~= label then
+                                                t.tag.Text = label
+                                                t.text = label
+                                            end
+                                            if t.col ~= col then
+                                                t.tag.Color = col
+                                                t.col = col
+                                            end
+                                            if t.size ~= subTagSize then
+                                                t.tag.Size = subTagSize
+                                                t.size = subTagSize
+                                            end
+
+                                            local curOff = tagOffsets[pn] or 20
+                                            local subStep = math.floor(subTagSize + 6)
+                                            tagOffsets[pn] = curOff + subStep
+                                            local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - curOff)
+                                            if t.x ~= x or t.y ~= y then
+                                                t.x = x; t.y = y
+                                                t.tag.Position = Vector2.new(x, y)
+                                            end
+                                            if not t.vis then
+                                                t.tag.Visible = true
+                                                t.vis = true
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    hideSubTags(count + 1)
+end
+
+-- ---------------- I-FRAME / INVINCIBILITY OVERHEAD TAGS ----------------
+local function hideIFrameTags(from)
+    local tags = IFrameRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
+            t.text = ""
+        end
+    end
+end
+
+local function renderIFrameTags()
+    local tags = IFrameRadar.tags
+    local count = 0
+    if S.bl_iframe_en and JutsuRadar.order then
+        local order = JutsuRadar.order
+        local roots = JutsuRadar.roots
+        local near = JutsuRadar.near
+        local maxTags = #tags
+        local iframeSize = S.bl_iframe_size or 13
+        local lp = Players.LocalPlayer
+        local myName = lp and lp.Name
+
+        local maxDist = S.bl_combat_dist or 400
+        for i = 1, #order do
+            if count >= maxTags then break end
+            local pn = order[i]
+            local d = near[pn]
+            if not d or d > maxDist then break end
+            local isSelf = (myName and pn == myName) or (lp and pn == lp.Name)
+            if isSelf and not S.bl_iframe_self then
+                -- skip self
+            else
+                local root = roots[pn]
+                if root then
+                    local inv = IFrameRadar.cache[pn]
+                    if not inv or (rNow - (IFrameRadar.cacheAt[pn] or 0)) > 15 then
+                        local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+                        local f = rsSettings and rsSettings:FindFirstChild(pn)
+                        inv = f and f:FindFirstChild("Invincible")
+                        IFrameRadar.cache[pn] = inv
+                        IFrameRadar.cacheAt[pn] = rNow
+                    end
+
+                    if inv then
+                        local okV, isInv = pcall(getValue, inv)
+                        if okV and isInv == true then
+                            local okP, rPos = pcall(getPosOf, root)
+                            if okP and isValidVec3(rPos) then
+                                local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                                if okS and onScreen and isValidVec2(sp) then
+                                    local dist = (rCamPos - rPos).Magnitude
+                                    local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                                    if isValidNum(rawH) then
+                                        local h = clamp(floor(rawH), 16, 450)
+                                        count = count + 1
+                                        local t = tags[count]
+                                        local label = "[INVINCIBLE]"
+                                        local col = Color3.fromRGB(255, 215, 0)
+
+                                        if t.text ~= label then
+                                            t.tag.Text = label
+                                            t.text = label
+                                        end
+                                        if t.col ~= col then
+                                            t.tag.Color = col
+                                            t.col = col
+                                        end
+                                        if t.size ~= iframeSize then
+                                            t.tag.Size = iframeSize
+                                            t.size = iframeSize
+                                        end
+
+                                        local curOff = tagOffsets[pn] or 20
+                                        local iframeStep = math.floor(iframeSize + 6)
+                                        tagOffsets[pn] = curOff + iframeStep
+                                        local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - curOff)
+                                        if t.x ~= x or t.y ~= y then
+                                            t.x = x; t.y = y
+                                            t.tag.Position = Vector2.new(x, y)
+                                        end
+                                        if not t.vis then
+                                            t.tag.Visible = true
+                                            t.vis = true
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    hideIFrameTags(count + 1)
+end
+
+-- ---------------- AWAKENING / MODE OVERHEAD TAGS ----------------
+local function hideModeTags(from)
+    local tags = ModeRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
+            t.text = ""
+        end
+    end
+end
+
+local function renderModeTags()
+    local tags = ModeRadar.tags
+    local count = 0
+    if S.bl_mode_en and JutsuRadar.order then
+        local order = JutsuRadar.order
+        local roots = JutsuRadar.roots
+        local near = JutsuRadar.near
+        local maxTags = #tags
+        local modeSize = S.bl_mode_size or 13
+        local lp = Players.LocalPlayer
+        local myName = lp and lp.Name
+
+        local maxDist = S.bl_combat_dist or 400
+        for i = 1, #order do
+            if count >= maxTags then break end
+            local pn = order[i]
+            local d = near[pn]
+            if not d or d > maxDist then break end
+            local isSelf = (myName and pn == myName) or (lp and pn == lp.Name)
+            if isSelf and not S.bl_mode_self then
+                -- skip self
+            else
+                local root = roots[pn]
+                if root then
+                    local entry = ModeRadar.cache[pn]
+                    if not entry or (rNow - (ModeRadar.cacheAt[pn] or 0)) > 15 then
+                        local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+                        local f = rsSettings and rsSettings:FindFirstChild(pn)
+                        entry = {
+                            awk = f and f:FindFirstChild("Awakened"),
+                            cd  = f and f:FindFirstChild("AwakeningCooldown"),
+                        }
+                        ModeRadar.cache[pn] = entry
+                        ModeRadar.cacheAt[pn] = rNow
+                    end
+
+                    local awkVal = ""
+                    local cdVal = 0
+                    if entry.awk then
+                        local okA, a = pcall(getValue, entry.awk)
+                        if okA and type(a) == "string" then awkVal = a end
+                    end
+                    if entry.cd then
+                        local okC, c = pcall(getValue, entry.cd)
+                        if okC and type(c) == "number" then cdVal = c end
+                    end
+
+                    local label, col
+                    if awkVal ~= "" then
+                        -- Mode is active!
+                        local modeName = getCleanModeName(awkVal)
+                        if S.bl_mode_dur and cdVal > 0 then
+                            local secLeft = math.ceil(cdVal)
+                            if S.bl_mode_name then
+                                label = "[" .. modeName .. ": " .. tostring(secLeft) .. "s]"
+                            else
+                                label = "[MODE: " .. tostring(secLeft) .. "s]"
+                            end
+                        elseif S.bl_mode_name then
+                            label = "[" .. modeName .. "]"
+                        end
+                        col = Color3.fromRGB(205, 80, 255)
+                    elseif S.bl_mode_cd and cdVal > 0 then
+                        -- Mode is on cooldown!
+                        local secLeft = math.ceil(cdVal)
+                        label = "[MODE CD: " .. tostring(secLeft) .. "s]"
+                        col = Color3.fromRGB(255, 140, 40)
+                    end
+
+                    if label then
+                        local okP, rPos = pcall(getPosOf, root)
+                        if okP and isValidVec3(rPos) then
+                            local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                            if okS and onScreen and isValidVec2(sp) then
+                                local dist = (rCamPos - rPos).Magnitude
+                                local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                                if isValidNum(rawH) then
+                                    local h = clamp(floor(rawH), 16, 450)
+                                    count = count + 1
+                                    local t = tags[count]
+
+                                    if t.text ~= label then
+                                        t.tag.Text = label
+                                        t.text = label
+                                    end
+                                    if t.col ~= col then
+                                        t.tag.Color = col
+                                        t.col = col
+                                    end
+                                    if t.size ~= modeSize then
+                                        t.tag.Size = modeSize
+                                        t.size = modeSize
+                                    end
+
+                                    local curOff = tagOffsets[pn] or 20
+                                    local modeStep = math.floor(modeSize + 6)
+                                    tagOffsets[pn] = curOff + modeStep
+                                    local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - curOff)
+                                    if t.x ~= x or t.y ~= y then
+                                        t.x = x; t.y = y
+                                        t.tag.Position = Vector2.new(x, y)
+                                    end
+                                    if not t.vis then
+                                        t.tag.Visible = true
+                                        t.vis = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    hideModeTags(count + 1)
 end
 
 -- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
@@ -2608,6 +3174,9 @@ local function hideAllDrawings()
     setHud(csHudContent, false)
     hideEventSlot()
     hideJutsuTags(1)
+    hideSubTags(1)
+    hideIFrameTags(1)
+    hideModeTags(1)
 end
 
 local function renderFrame()
@@ -2647,6 +3216,17 @@ local function renderFrame()
         rebuildDrawLists()
     end
 
+    _G.Bloodline_DebugState = {
+        trackedMobs = #trackedMobs,
+        trackedCorrupt = #trackedCorrupt,
+        trackedRifts = #trackedRifts,
+        trackedNPCs = #trackedNPCs,
+        trackedItems = #trackedItems,
+        drawMobs = #drawMobs,
+        drawItems = #drawItems,
+        scanEpoch = scanEpoch,
+    }
+
     renderMobs()
     renderCorrupt()
     renderRifts()
@@ -2654,9 +3234,16 @@ local function renderFrame()
     renderItems()
     renderChakraHud()
     renderBeastTamer()
-    -- Isolated: an error in the jutsu tags can never blank the ESP
+    tagOffsets = {}
+    -- Isolated: an error in any combat assist tag can never blank the ESP
     local okJ, errJ = pcall(renderJutsuTags)
     if not okJ then logDebug("Jutsu tag render error: " .. tostring(errJ)) end
+    local okSub, errSub = pcall(renderSubTags)
+    if not okSub then logDebug("Sub tag render error: " .. tostring(errSub)) end
+    local okInv, errInv = pcall(renderIFrameTags)
+    if not okInv then logDebug("IFrame tag render error: " .. tostring(errInv)) end
+    local okMode, errMode = pcall(renderModeTags)
+    if not okMode then logDebug("Mode tag render error: " .. tostring(errMode)) end
 end
 
 _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
