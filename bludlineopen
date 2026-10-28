@@ -395,6 +395,25 @@ initUI("bl_stun_hit", true)
 initUI("bl_stun_knock", true)
 initUI("bl_stun_self", false)
 initUI("bl_inspect_en", true)
+initUI("bl_esp_fps", 90)
+initUI("bl_fps_snap", true)
+
+local FPS_PRESETS = {30, 60, 90, 120, 144}
+local function snapToPreset(n)
+    local best = FPS_PRESETS[1]
+    local minDiff = math.abs(n - best)
+    for i = 2, #FPS_PRESETS do
+        local diff = math.abs(n - FPS_PRESETS[i])
+        if diff < minDiff then
+            minDiff = diff
+            best = FPS_PRESETS[i]
+        end
+    end
+    return best
+end
+
+local MAX_RENDER_FPS = 90
+local MIN_FRAME_TIME = (0.85 / 90)
 
 -- Apply requested defaults
 if UI.GetValue("bl_v9_defaults") ~= true then
@@ -447,6 +466,7 @@ local SETTING_DEFAULTS = {
     {"bl_mode_en", true}, {"bl_mode_name", true}, {"bl_mode_dur", true}, {"bl_mode_cd", true}, {"bl_mode_size", 13}, {"bl_mode_self", false},
     {"bl_stun_en", true}, {"bl_stun_size", 13}, {"bl_stun_block", true}, {"bl_stun_hyper", true}, {"bl_stun_hit", true}, {"bl_stun_knock", true}, {"bl_stun_self", false},
     {"bl_inspect_en", true},
+    {"bl_esp_fps", 90}, {"bl_fps_snap", true},
 }
 
 local function refreshSettings()
@@ -454,13 +474,19 @@ local function refreshSettings()
     for i = 1, #SETTING_DEFAULTS do
         local d = SETTING_DEFAULTS[i]
         local v = getUI(d[1], d[2])
-        if type(v) == "number" and d[1]:find("size") then
+        if type(v) == "number" and (d[1]:find("size") or d[1]:find("fps") or d[1]:find("dist")) then
             v = math.floor(v)
         end
         if S[d[1]] ~= v then
             S[d[1]] = v
             changed = true
         end
+    end
+    if S.bl_esp_fps then
+        local targetFps = S.bl_esp_fps
+        if S.bl_fps_snap then targetFps = snapToPreset(targetFps) end
+        MAX_RENDER_FPS = targetFps
+        MIN_FRAME_TIME = (targetFps > 0) and (0.85 / targetFps) or 0
     end
     if changed then settingsVersion = settingsVersion + 1 end
     return changed
@@ -510,6 +536,20 @@ UI.AddTab("Bloodline", function(tab)
     csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", true)
 
     -- ================= RIGHT COLUMN =================
+    local perfSec = tab:Section("Engine Performance & FPS", "Right")
+    perfSec:SliderInt("bl_esp_fps", "ESP Target FPS (30 - 144)", 30, 144, getUI("bl_esp_fps", 90), function(val)
+        local n = math.floor(tonumber(val) or 90)
+        if getUI("bl_fps_snap", true) then
+            n = snapToPreset(n)
+        end
+        UI.SetValue("bl_esp_fps", n)
+        S.bl_esp_fps = n
+        MAX_RENDER_FPS = n
+        MIN_FRAME_TIME = (n > 0) and (0.85 / n) or 0
+        settingsVersion = settingsVersion + 1
+    end)
+    perfSec:Toggle("bl_fps_snap", "Snap to 30 / 60 / 90 / 120 / 144", true)
+
     local npcSec = tab:Section("Town & Friendly NPCs", "Right")
     npcSec:Toggle("bl_npc_en", "NPCs Enabled", false)
     npcSec:Keybind("bl_npc_kb", 0, "toggle")
@@ -1104,7 +1144,7 @@ end
 local SCAN_INTERVAL     = 0.85   -- pause between full Workspace passes (s)
 local SCAN_SLICE_BUDGET = 0.002  -- max seconds of scan work per frame before yielding
 local SETTINGS_POLL     = 0.10   -- how often UI toggles are re-read (s)
-local MAX_RENDER_FPS    = 90     -- renderer cap (0 = uncapped)
+-- MAX_RENDER_FPS and MIN_FRAME_TIME are configured dynamically via settings above
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
 local NEG_TTL_BASE      = 4.0    -- how long "not interesting" objects are skipped (s) ...
 local NEG_TTL_JITTER    = 3.0    -- ... plus up to this much random jitter
@@ -2309,7 +2349,7 @@ end -- end of collector scope
 -- ============================================================
 local lastCamPos        = nil
 local lastRenderClock   = 0
-local MIN_FRAME_TIME    = (MAX_RENDER_FPS and MAX_RENDER_FPS > 0) and (0.85 / MAX_RENDER_FPS) or 0
+-- MIN_FRAME_TIME is configured dynamically from MAX_RENDER_FPS in settings
 local lastSettingsPoll  = 0
 local lastDrawSettingsVersion = -1
 
