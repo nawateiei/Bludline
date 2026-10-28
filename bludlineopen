@@ -16,9 +16,10 @@ end
 _G.Bloodline_running = false
 _G.Bloodline_gen = (_G.Bloodline_gen or 0) + 1
 
-pcall(function() UI.RemoveTab("Bloodline") end)
-pcall(function() UI.RemoveTab("Combat Assists") end)
-pcall(function() UI.RemoveTab("Event Notifier") end)
+if _G.Bloodline_JDUI then
+    pcall(function() _G.Bloodline_JDUI:Destroy() end)
+    _G.Bloodline_JDUI = nil
+end
 
 -- Gracefully wait until the game world, player, and camera are fully loaded (essential on server hop / re-exec)
 if pcall(function() return game:IsLoaded() end) then
@@ -292,112 +293,126 @@ local FRIENDLY_NPCS = {
     ["Chieftess Kaguya Oceansucks, Former Anbu"] = true,
 }
 
+-- Forward declarations for inspector controls
+local cycleInspectPlayer
+local hideProfileCard
+
 -- ============================================================
---  DYNAMIC MATCHA UI STATE MANAGEMENT
+--  SETTINGS SNAPSHOT & JDUI MENU INTERFACE
 -- ============================================================
-local function getUI(key, default)
-    local v = UI.GetValue(key)
-    if v ~= nil then
-        return v
-    end
-    return default
-end
+local S = {
+    -- Combat Mobs
+    bl_mob_en = true,
+    bl_mob_box = true,
+    bl_mob_name = true,
+    bl_mob_hp_t = true,
+    bl_mob_hp_b = true,
+    bl_mob_dist = true,
+    bl_mob_clean = true,
+    bl_mob_boss = false,
 
-local function initUI(key, default)
-    if UI.GetValue(key) == nil then
-        UI.SetValue(key, default)
-    end
-end
+    -- Corruption Points
+    bl_corrupt_en = true,
+    bl_corrupt_box = true,
+    bl_corrupt_name = true,
+    bl_corrupt_hp = true,
+    bl_corrupt_progress = true,
+    bl_corrupt_dist = true,
+    bl_corrupt_dest = true,
+    bl_ev_pumpkin = true,
 
--- Initialize default settings only if not already set (preserves user settings)
-initUI("bl_mob_en", true)
-initUI("bl_mob_box", true)
-initUI("bl_mob_name", true)
-initUI("bl_mob_hp_t", true)
-initUI("bl_mob_hp_b", true)
-initUI("bl_mob_dist", true)
-initUI("bl_mob_clean", true)
-initUI("bl_mob_boss", false)
+    -- Event Rifts & Portals
+    bl_rift_en = true,
+    bl_rift_box = true,
+    bl_rift_name = true,
+    bl_rift_dist = true,
+    bl_rift_trc = false,
+    bl_rift_notify = true,
 
-initUI("bl_corrupt_en", true)
-initUI("bl_corrupt_box", true)
-initUI("bl_corrupt_name", true)
-initUI("bl_corrupt_hp", true)
-initUI("bl_corrupt_progress", true)
-initUI("bl_corrupt_dist", true)
-initUI("bl_corrupt_dest", true)
-initUI("bl_ev_pumpkin", true)
+    -- Performance & FPS
+    bl_esp_fps = 90,
+    bl_fps_snap = true,
 
-initUI("bl_rift_en", true)
-initUI("bl_rift_box", true)
-initUI("bl_rift_name", true)
-initUI("bl_rift_dist", true)
-initUI("bl_rift_trc", false)
-initUI("bl_rift_notify", true)
+    -- Town NPCs
+    bl_npc_en = false,
+    bl_npc_box = false,
+    bl_npc_name = true,
+    bl_npc_dist = true,
 
-initUI("bl_cs_en", true)
-initUI("bl_cs_notify", true)
-initUI("bl_cs_use_notify", true)
-initUI("bl_cs_hud", true)
+    -- Rare Items & Alerts
+    bl_rare_notif = true,
+    bl_rare_trc = true,
+    bl_r_life = true,
+    bl_r_forg = true,
+    bl_r_chak = true,
+    bl_r_scrl = true,
+    bl_r_rings = true,
+    bl_r_schem = true,
+    bl_r_eyes = true,
+    bl_ev_beast_tamer = true,
+    bl_ev_beast_esp = false,
 
-initUI("bl_npc_en", false)
-initUI("bl_npc_box", false)
-initUI("bl_npc_name", true)
-initUI("bl_npc_dist", true)
+    -- Chakra Sense Radar
+    bl_cs_en = true,
+    bl_cs_notify = true,
+    bl_cs_use_notify = true,
+    bl_cs_hud = true,
 
-initUI("bl_rare_notif", true)
-initUI("bl_rare_trc", true)
-initUI("bl_r_life", true)
-initUI("bl_r_forg", true)
-initUI("bl_r_chak", true)
-initUI("bl_r_scrl", true)
-initUI("bl_r_rings", true)
-initUI("bl_r_schem", true)
-initUI("bl_r_eyes", true)
-initUI("bl_ev_beast_tamer", true)
-initUI("bl_ev_beast_esp", false)
+    -- Items & Drops
+    bl_item_en = true,
+    bl_item_box = false,
+    bl_item_name = true,
+    bl_item_dist = true,
+    f_common_fruit = true,
+    f_bells = false,
+    f_seaweed = false,
+    f_gloweed = false,
+    f_other = true,
 
-initUI("bl_item_en", true)
-initUI("bl_item_box", false)
-initUI("bl_item_name", true)
-initUI("bl_item_dist", true)
-initUI("f_common_fruit", true)
-initUI("f_bells", false)
-initUI("f_seaweed", false)
-initUI("f_gloweed", false)
-initUI("f_other", true)
+    -- Combat Settings
+    bl_combat_dist = 400,
+    bl_jutsu_self = false,
+    bl_sub_self = false,
+    bl_iframe_self = false,
+    bl_mode_self = false,
+    bl_stun_self = false,
 
-initUI("bl_jutsu_tag", true)
-initUI("bl_jutsu_box", true)
-initUI("bl_jutsu_size", 13)
-initUI("bl_jutsu_self", false)
-initUI("bl_jutsu_mobs", false)
-initUI("bl_jutsu_cd", true)
-initUI("bl_combat_dist", 400)
-initUI("bl_sub_en", true)
-initUI("bl_sub_size", 13)
-initUI("bl_sub_only_cd", true)
-initUI("bl_sub_self", false)
-initUI("bl_iframe_en", true)
-initUI("bl_iframe_size", 13)
-initUI("bl_iframe_self", false)
-initUI("bl_mode_en", true)
-initUI("bl_mode_name", true)
-initUI("bl_mode_dur", true)
-initUI("bl_mode_cd", true)
-initUI("bl_mode_size", 13)
-initUI("bl_mode_self", false)
-initUI("bl_stun_en", true)
-initUI("bl_stun_size", 13)
-initUI("bl_stun_block", true)
-initUI("bl_stun_hyper", true)
-initUI("bl_stun_hit", true)
-initUI("bl_stun_knock", true)
-initUI("bl_stun_self", false)
-initUI("bl_inspect_en", true)
-initUI("bl_esp_fps", 90)
-initUI("bl_fps_snap", true)
+    -- Jutsu Overhead Tags
+    bl_jutsu_tag = true,
+    bl_jutsu_box = true,
+    bl_jutsu_size = 13,
+    bl_jutsu_mobs = false,
+    bl_jutsu_cd = true,
 
+    -- Sub Tracker
+    bl_sub_en = true,
+    bl_sub_size = 13,
+    bl_sub_only_cd = true,
+
+    -- I-Frames
+    bl_iframe_en = true,
+    bl_iframe_size = 13,
+
+    -- Mode Tracker
+    bl_mode_en = true,
+    bl_mode_name = true,
+    bl_mode_dur = true,
+    bl_mode_cd = true,
+    bl_mode_size = 13,
+
+    -- Stuns
+    bl_stun_en = true,
+    bl_stun_size = 13,
+    bl_stun_block = true,
+    bl_stun_hyper = true,
+    bl_stun_hit = true,
+    bl_stun_knock = true,
+
+    -- Leaderboard Inspector
+    bl_inspect_en = true,
+}
+
+local settingsVersion = 0
 local FPS_PRESETS = {30, 60, 90, 120, 144}
 local function snapToPreset(n)
     local best = FPS_PRESETS[1]
@@ -415,256 +430,253 @@ end
 local MAX_RENDER_FPS = 90
 local MIN_FRAME_TIME = (0.85 / 90)
 
--- Apply requested defaults
-if UI.GetValue("bl_v9_defaults") ~= true then
-    UI.SetValue("bl_corrupt_en", true)
-    UI.SetValue("bl_corrupt_progress", true)
-    UI.SetValue("bl_rift_trc", false)
-    UI.SetValue("bl_jutsu_mobs", false)
-    UI.SetValue("bl_jutsu_self", false)
-    UI.SetValue("bl_sub_self", false)
-    UI.SetValue("bl_iframe_self", false)
-    UI.SetValue("bl_mode_self", false)
-    UI.SetValue("bl_stun_self", false)
-    UI.SetValue("bl_sub_only_cd", true)
-    UI.SetValue("bl_combat_dist", 400)
-    UI.SetValue("bl_npc_box", false)
-    UI.SetValue("bl_item_box", false)
-    UI.SetValue("bl_ev_beast_esp", false)
-    UI.SetValue("f_bells", false)
-    UI.SetValue("f_seaweed", false)
-    UI.SetValue("f_gloweed", false)
-    UI.SetValue("f_common_fruit", true)
-    UI.SetValue("bl_v9_defaults", true)
+local function updateFpsTiming()
+    local targetFps = S.bl_esp_fps or 90
+    if S.bl_fps_snap then targetFps = snapToPreset(targetFps) end
+    MAX_RENDER_FPS = targetFps
+    MIN_FRAME_TIME = (targetFps > 0) and (0.85 / targetFps) or 0
 end
-
--- ============================================================
---  SETTINGS SNAPSHOT
---  Every setting is copied into the plain table S a few times per second; hot paths read S.
--- ============================================================
-local S = {}
-local settingsVersion = 0
-local SETTING_DEFAULTS = {
-    {"bl_mob_en", true}, {"bl_mob_box", true}, {"bl_mob_name", true}, {"bl_mob_hp_t", true},
-    {"bl_mob_hp_b", true}, {"bl_mob_dist", true}, {"bl_mob_clean", true}, {"bl_mob_boss", false},
-    {"bl_corrupt_en", true}, {"bl_corrupt_box", true}, {"bl_corrupt_name", true},
-    {"bl_corrupt_hp", true}, {"bl_corrupt_progress", true}, {"bl_corrupt_dist", true}, {"bl_corrupt_dest", true}, {"bl_ev_pumpkin", true},
-    {"bl_rift_en", true}, {"bl_rift_box", true}, {"bl_rift_name", true},
-    {"bl_rift_dist", true}, {"bl_rift_trc", false}, {"bl_rift_notify", true},
-    {"bl_cs_en", true}, {"bl_cs_notify", true}, {"bl_cs_use_notify", true}, {"bl_cs_hud", true},
-    {"bl_npc_en", false}, {"bl_npc_box", false}, {"bl_npc_name", true}, {"bl_npc_dist", true},
-    {"bl_rare_notif", true}, {"bl_rare_trc", true}, {"bl_r_life", true}, {"bl_r_forg", true},
-    {"bl_r_chak", true}, {"bl_r_scrl", true}, {"bl_r_rings", true}, {"bl_r_schem", true},
-    {"bl_r_eyes", true}, {"bl_ev_beast_tamer", true}, {"bl_ev_beast_esp", false},
-    {"bl_item_en", true}, {"bl_item_box", false}, {"bl_item_name", true}, {"bl_item_dist", true},
-    {"f_common_fruit", true}, {"f_bells", false}, {"f_seaweed", false}, {"f_gloweed", false},
-    {"f_other", true},
-    {"bl_jutsu_tag", true}, {"bl_jutsu_box", true}, {"bl_jutsu_size", 13}, {"bl_jutsu_self", false}, {"bl_jutsu_mobs", false}, {"bl_jutsu_cd", true},
-    {"bl_combat_dist", 400},
-    {"bl_sub_en", true}, {"bl_sub_size", 13}, {"bl_sub_only_cd", true}, {"bl_sub_self", false},
-    {"bl_iframe_en", true}, {"bl_iframe_size", 13}, {"bl_iframe_self", false},
-    {"bl_mode_en", true}, {"bl_mode_name", true}, {"bl_mode_dur", true}, {"bl_mode_cd", true}, {"bl_mode_size", 13}, {"bl_mode_self", false},
-    {"bl_stun_en", true}, {"bl_stun_size", 13}, {"bl_stun_block", true}, {"bl_stun_hyper", true}, {"bl_stun_hit", true}, {"bl_stun_knock", true}, {"bl_stun_self", false},
-    {"bl_inspect_en", true},
-    {"bl_esp_fps", 90}, {"bl_fps_snap", true},
-}
 
 local function refreshSettings()
-    local changed = false
-    for i = 1, #SETTING_DEFAULTS do
-        local d = SETTING_DEFAULTS[i]
-        local v = getUI(d[1], d[2])
-        if type(v) == "number" and (d[1]:find("size") or d[1]:find("fps") or d[1]:find("dist")) then
-            v = math.floor(v)
-        end
-        if S[d[1]] ~= v then
-            S[d[1]] = v
-            changed = true
-        end
-    end
-    if S.bl_esp_fps then
-        local targetFps = S.bl_esp_fps
-        if S.bl_fps_snap then targetFps = snapToPreset(targetFps) end
-        MAX_RENDER_FPS = targetFps
-        MIN_FRAME_TIME = (targetFps > 0) and (0.85 / targetFps) or 0
-    end
-    if changed then settingsVersion = settingsVersion + 1 end
-    return changed
+    return false
 end
-refreshSettings()
 
-UI.AddTab("Bloodline", function(tab)
-    -- ================= LEFT COLUMN =================
-    local mobSec = tab:Section("Combat Mobs ESP", "Left")
-    mobSec:Toggle("bl_mob_en", "Combat Mobs Enabled", true)
-    mobSec:Keybind("bl_mob_kb", 0, "toggle")
-    mobSec:Toggle("bl_mob_box", "Show Boxes", true)
-    mobSec:ColorPicker("bl_mob_col", 1, 0.23, 0.23, 1)
-    mobSec:Toggle("bl_mob_name", "Show Name", true)
-    mobSec:Toggle("bl_mob_hp_t", "Show HP Text", true)
-    mobSec:Toggle("bl_mob_hp_b", "Show Health Bar", true)
-    mobSec:Toggle("bl_mob_dist", "Show Distance", true)
-    mobSec:Toggle("bl_mob_clean", "Clean Name Numbers", true)
-    mobSec:Toggle("bl_mob_boss", "Bosses Only (>500 HP)", false)
+-- Load JDUI (Drawing API external executor menu)
+local ui = nil
+if _G.Bloodline_JDUI then
+    pcall(function() _G.Bloodline_JDUI:Destroy() end)
+    _G.Bloodline_JDUI = nil
+end
 
-    local corruptSec = tab:Section("Corruption Points", "Left")
-    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", true)
-    corruptSec:Keybind("bl_corrupt_kb", 0, "toggle")
-    corruptSec:Toggle("bl_corrupt_box", "Show Boxes", true)
-    corruptSec:ColorPicker("bl_corrupt_col", 0.68, 0.17, 1.0, 1)
-    corruptSec:Toggle("bl_corrupt_name", "Show Name", true)
-    corruptSec:Toggle("bl_corrupt_hp", "Show HP / Progress", true)
-    corruptSec:Toggle("bl_corrupt_progress", "Show as Progress % (0-100%)", true)
-    corruptSec:Toggle("bl_corrupt_dist", "Show Distance", true)
-    corruptSec:Toggle("bl_corrupt_dest", "Hide If Destroyed", true)
-    corruptSec:Toggle("bl_ev_pumpkin", "Pumpkin Point Notify", true)
+local ok_jdui, res_jdui = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/jdev-studio/jdui/refs/heads/main/JDUI"))() or _G.JDUI
+end)
 
-    local riftSec = tab:Section("Event Rifts & Portals", "Left")
-    riftSec:Toggle("bl_rift_en", "Event Portals / Rifts Enabled", true)
-    riftSec:Keybind("bl_rift_kb", 0, "toggle")
-    riftSec:Toggle("bl_rift_box", "Show Boxes", true)
-    riftSec:ColorPicker("bl_rift_col", 1.0, 0.25, 0.08, 1)
-    riftSec:Toggle("bl_rift_name", "Show Name", true)
-    riftSec:Toggle("bl_rift_dist", "Show Distance", true)
-    riftSec:Toggle("bl_rift_trc", "Directional Tracer", false)
-    riftSec:Toggle("bl_rift_notify", "Spawn Alert Notify", true)
+if ok_jdui and res_jdui then
+    ui = res_jdui
+    _G.Bloodline_JDUI = ui
+    pcall(function()
+        ui:SetOverflow("Scroll")
+        ui:SetLayout("Compact")
+        ui.CaptureInput = false -- CRITICAL: Never let JDUI call setrobloxinput(false)! Completely eliminates game input lag / "ping" feel
+        if ui.SetOpen then pcall(ui.SetOpen, ui, false) else ui.Visible = false end
+    end)
 
-    local csSec = tab:Section("Chakra Sense Radar", "Left")
-    csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", true)
-    csSec:Toggle("bl_cs_notify", "Notify On Detected", true)
-    csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", true)
-    csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", true)
+    -- ================= TAB 1: World ESP =================
+    local tabWorld = ui:AddTab({ Title = "World ESP", Icon = "layers" })
 
-    -- ================= RIGHT COLUMN =================
-    local perfSec = tab:Section("Engine Performance & FPS", "Right")
-    perfSec:SliderInt("bl_esp_fps", "ESP Target FPS (30 - 144)", 30, 144, getUI("bl_esp_fps", 90), function(val)
-        local n = math.floor(tonumber(val) or 90)
-        if getUI("bl_fps_snap", true) then
-            n = snapToPreset(n)
+    local islMobs = tabWorld:AddIsland({ Title = "Combat Mobs" })
+    islMobs:AddToggle({ Title = "Combat Mobs Enabled", Flag = "bl_mob_en", Default = true, Callback = function(v) S.bl_mob_en = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Show Boxes", Flag = "bl_mob_box", Default = true, Callback = function(v) S.bl_mob_box = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Show Name", Flag = "bl_mob_name", Default = true, Callback = function(v) S.bl_mob_name = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Show HP Text", Flag = "bl_mob_hp_t", Default = true, Callback = function(v) S.bl_mob_hp_t = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Show Health Bar", Flag = "bl_mob_hp_b", Default = true, Callback = function(v) S.bl_mob_hp_b = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Show Distance", Flag = "bl_mob_dist", Default = true, Callback = function(v) S.bl_mob_dist = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Clean Name Numbers", Flag = "bl_mob_clean", Default = true, Callback = function(v) S.bl_mob_clean = v; settingsVersion = settingsVersion + 1 end })
+    islMobs:AddToggle({ Title = "Bosses Only (>500 HP)", Flag = "bl_mob_boss", Default = false, Callback = function(v) S.bl_mob_boss = v; settingsVersion = settingsVersion + 1 end })
+
+    local islCorrupt = tabWorld:AddIsland({ Title = "Corruption Points" })
+    islCorrupt:AddToggle({ Title = "Corruption Points Enabled", Flag = "bl_corrupt_en", Default = true, Callback = function(v) S.bl_corrupt_en = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Show Boxes", Flag = "bl_corrupt_box", Default = true, Callback = function(v) S.bl_corrupt_box = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Show Name", Flag = "bl_corrupt_name", Default = true, Callback = function(v) S.bl_corrupt_name = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Show HP / Progress", Flag = "bl_corrupt_hp", Default = true, Callback = function(v) S.bl_corrupt_hp = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Show as Progress % (0-100%)", Flag = "bl_corrupt_progress", Default = true, Callback = function(v) S.bl_corrupt_progress = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Show Distance", Flag = "bl_corrupt_dist", Default = true, Callback = function(v) S.bl_corrupt_dist = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Hide If Destroyed", Flag = "bl_corrupt_dest", Default = true, Callback = function(v) S.bl_corrupt_dest = v; settingsVersion = settingsVersion + 1 end })
+    islCorrupt:AddToggle({ Title = "Pumpkin Point Notify", Flag = "bl_ev_pumpkin", Default = true, Callback = function(v) S.bl_ev_pumpkin = v; settingsVersion = settingsVersion + 1 end })
+
+    local islRift = tabWorld:AddIsland({ Title = "Event Rifts & Portals" })
+    islRift:AddToggle({ Title = "Event Portals / Rifts Enabled", Flag = "bl_rift_en", Default = true, Callback = function(v) S.bl_rift_en = v; settingsVersion = settingsVersion + 1 end })
+    islRift:AddToggle({ Title = "Show Boxes", Flag = "bl_rift_box", Default = true, Callback = function(v) S.bl_rift_box = v; settingsVersion = settingsVersion + 1 end })
+    islRift:AddToggle({ Title = "Show Name", Flag = "bl_rift_name", Default = true, Callback = function(v) S.bl_rift_name = v; settingsVersion = settingsVersion + 1 end })
+    islRift:AddToggle({ Title = "Show Distance", Flag = "bl_rift_dist", Default = true, Callback = function(v) S.bl_rift_dist = v; settingsVersion = settingsVersion + 1 end })
+    islRift:AddToggle({ Title = "Directional Tracer", Flag = "bl_rift_trc", Default = false, Callback = function(v) S.bl_rift_trc = v; settingsVersion = settingsVersion + 1 end })
+    islRift:AddToggle({ Title = "Spawn Alert Notify", Flag = "bl_rift_notify", Default = true, Callback = function(v) S.bl_rift_notify = v; settingsVersion = settingsVersion + 1 end })
+
+    local islNpc = tabWorld:AddIsland({ Title = "Town & Friendly NPCs" })
+    islNpc:AddToggle({ Title = "NPCs Enabled", Flag = "bl_npc_en", Default = false, Callback = function(v) S.bl_npc_en = v; settingsVersion = settingsVersion + 1 end })
+    islNpc:AddToggle({ Title = "Show Boxes", Flag = "bl_npc_box", Default = false, Callback = function(v) S.bl_npc_box = v; settingsVersion = settingsVersion + 1 end })
+    islNpc:AddToggle({ Title = "Show Name", Flag = "bl_npc_name", Default = true, Callback = function(v) S.bl_npc_name = v; settingsVersion = settingsVersion + 1 end })
+    islNpc:AddToggle({ Title = "Show Distance", Flag = "bl_npc_dist", Default = true, Callback = function(v) S.bl_npc_dist = v; settingsVersion = settingsVersion + 1 end })
+
+    local islPerf = tabWorld:AddIsland({ Title = "Engine Performance & FPS" })
+    islPerf:AddSlider({
+        Title = "ESP Target FPS",
+        Flag = "bl_esp_fps",
+        Min = 30, Max = 144, Step = 1,
+        Default = 90,
+        Suffix = " fps",
+        Callback = function(val)
+            local n = math.floor(tonumber(val) or 90)
+            if S.bl_fps_snap then n = snapToPreset(n) end
+            S.bl_esp_fps = n
+            updateFpsTiming()
+            settingsVersion = settingsVersion + 1
         end
-        UI.SetValue("bl_esp_fps", n)
-        S.bl_esp_fps = n
-        MAX_RENDER_FPS = n
-        MIN_FRAME_TIME = (n > 0) and (0.85 / n) or 0
-        settingsVersion = settingsVersion + 1
-    end)
-    perfSec:Toggle("bl_fps_snap", "Snap to 30 / 60 / 90 / 120 / 144", true)
+    })
+    islPerf:AddToggle({
+        Title = "Snap to 30/60/90/120/144",
+        Flag = "bl_fps_snap",
+        Default = true,
+        Callback = function(on)
+            S.bl_fps_snap = on
+            if on then
+                local n = snapToPreset(S.bl_esp_fps or 90)
+                S.bl_esp_fps = n
+                updateFpsTiming()
+            end
+            settingsVersion = settingsVersion + 1
+        end
+    })
 
-    local npcSec = tab:Section("Town & Friendly NPCs", "Right")
-    npcSec:Toggle("bl_npc_en", "NPCs Enabled", false)
-    npcSec:Keybind("bl_npc_kb", 0, "toggle")
-    npcSec:Toggle("bl_npc_box", "Show Boxes", false)
-    npcSec:ColorPicker("bl_npc_col", 0, 0.82, 1.0, 1)
-    npcSec:Toggle("bl_npc_name", "Show Name", true)
-    npcSec:Toggle("bl_npc_dist", "Show Distance", true)
+    -- ================= TAB 2: Items & Radar =================
+    local tabItems = ui:AddTab({ Title = "Items & Radar", Icon = "spark" })
 
-    local rareSec = tab:Section("Rare Items & Alerts", "Right")
-    rareSec:Toggle("bl_rare_notif", "Proximity Notify Popup", true)
-    rareSec:Toggle("bl_rare_trc", "Directional Tracer Lines", true)
-    rareSec:Toggle("bl_r_life", "Life Up Fruit", true)
-    rareSec:Toggle("bl_r_forg", "Fruit of Forgetfulness", true)
-    rareSec:Toggle("bl_r_chak", "Chakra Fruit", true)
-    rareSec:Toggle("bl_r_scrl", "Scrolls (Mastery/Trait/Summon)", true)
-    rareSec:Toggle("bl_r_rings", "Rare Rings", true)
-    rareSec:Toggle("bl_r_schem", "Schematics", true)
-    rareSec:Toggle("bl_r_eyes", "Rare Eyes (Sharingan, Rinnegan...)", true)
-    rareSec:Toggle("bl_ev_beast_tamer", "Beast Tamer Event Notify", true)
-    rareSec:Toggle("bl_ev_beast_esp", "Beast Tamer ESP & Tracer", false)
+    local islRare = tabItems:AddIsland({ Title = "Rare Items & Alerts" })
+    islRare:AddToggle({ Title = "Proximity Notify Popup", Flag = "bl_rare_notif", Default = true, Callback = function(v) S.bl_rare_notif = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Directional Tracer Lines", Flag = "bl_rare_trc", Default = true, Callback = function(v) S.bl_rare_trc = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Life Up Fruit", Flag = "bl_r_life", Default = true, Callback = function(v) S.bl_r_life = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Fruit of Forgetfulness", Flag = "bl_r_forg", Default = true, Callback = function(v) S.bl_r_forg = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Chakra Fruit", Flag = "bl_r_chak", Default = true, Callback = function(v) S.bl_r_chak = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Scrolls (Mastery/Trait/Summon)", Flag = "bl_r_scrl", Default = true, Callback = function(v) S.bl_r_scrl = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Rare Rings", Flag = "bl_r_rings", Default = true, Callback = function(v) S.bl_r_rings = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Schematics", Flag = "bl_r_schem", Default = true, Callback = function(v) S.bl_r_schem = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Rare Eyes (Sharingan, Rinnegan...)", Flag = "bl_r_eyes", Default = true, Callback = function(v) S.bl_r_eyes = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Beast Tamer Event Notify", Flag = "bl_ev_beast_tamer", Default = true, Callback = function(v) S.bl_ev_beast_tamer = v; settingsVersion = settingsVersion + 1 end })
+    islRare:AddToggle({ Title = "Beast Tamer ESP & Tracer", Flag = "bl_ev_beast_esp", Default = false, Callback = function(v) S.bl_ev_beast_esp = v; settingsVersion = settingsVersion + 1 end })
 
-    local itemSec = tab:Section("Items (Fruits, Bells, Drops)", "Right")
-    itemSec:Toggle("bl_item_en", "Items ESP Enabled", true)
-    itemSec:Keybind("bl_item_kb", 0, "toggle")
-    itemSec:Toggle("bl_item_box", "Show Boxes", false)
-    itemSec:Toggle("bl_item_name", "Show Names", true)
-    itemSec:Toggle("bl_item_dist", "Show Distance", true)
-    itemSec:Toggle("f_common_fruit", "Common Fruit", true)
-    itemSec:Toggle("f_bells", "Bells (Sealing / Training)", false)
-    itemSec:Toggle("f_seaweed", "Seaweed", false)
-    itemSec:Toggle("f_gloweed", "Gloweed", false)
-    itemSec:Toggle("f_other", "Other Drops", true)
-end)
+    local islCs = tabItems:AddIsland({ Title = "Chakra Sense Radar" })
+    islCs:AddToggle({ Title = "Chakra Radar Enabled", Flag = "bl_cs_en", Default = true, Callback = function(v) S.bl_cs_en = v; settingsVersion = settingsVersion + 1 end })
+    islCs:AddToggle({ Title = "Notify On Detected", Flag = "bl_cs_notify", Default = true, Callback = function(v) S.bl_cs_notify = v; settingsVersion = settingsVersion + 1 end })
+    islCs:AddToggle({ Title = "Notify On Active Cast", Flag = "bl_cs_use_notify", Default = true, Callback = function(v) S.bl_cs_use_notify = v; settingsVersion = settingsVersion + 1 end })
+    islCs:AddToggle({ Title = "Show Screen Overlay HUD", Flag = "bl_cs_hud", Default = true, Callback = function(v) S.bl_cs_hud = v; settingsVersion = settingsVersion + 1 end })
 
-UI.AddTab("Combat Assists", function(tab)
-    -- ================= LEFT COLUMN =================
-    local cfgSec = tab:Section("Combat Settings", "Left")
-    cfgSec:SliderInt("bl_combat_dist", "Combat Assists Range", 50, 1200, getUI("bl_combat_dist", 400), function(val)
-        local n = math.floor(tonumber(val) or 400)
-        UI.SetValue("bl_combat_dist", n)
-        S.bl_combat_dist = n
-        settingsVersion = settingsVersion + 1
-    end)
-    cfgSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", false)
-    cfgSec:Toggle("bl_sub_self", "Show Own Sub Status", false)
-    cfgSec:Toggle("bl_iframe_self", "Show Own I-Frames", false)
-    cfgSec:Toggle("bl_mode_self", "Show Own Mode Status", false)
-    cfgSec:Toggle("bl_stun_self", "Show Own Stun Status", false)
+    local islDrops = tabItems:AddIsland({ Title = "Items (Fruits, Bells, Drops)" })
+    islDrops:AddToggle({ Title = "Items ESP Enabled", Flag = "bl_item_en", Default = true, Callback = function(v) S.bl_item_en = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Show Boxes", Flag = "bl_item_box", Default = false, Callback = function(v) S.bl_item_box = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Show Names", Flag = "bl_item_name", Default = true, Callback = function(v) S.bl_item_name = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Show Distance", Flag = "bl_item_dist", Default = true, Callback = function(v) S.bl_item_dist = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Common Fruit", Flag = "f_common_fruit", Default = true, Callback = function(v) S.f_common_fruit = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Bells (Sealing / Training)", Flag = "f_bells", Default = false, Callback = function(v) S.f_bells = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Seaweed", Flag = "f_seaweed", Default = false, Callback = function(v) S.f_seaweed = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Gloweed", Flag = "f_gloweed", Default = false, Callback = function(v) S.f_gloweed = v; settingsVersion = settingsVersion + 1 end })
+    islDrops:AddToggle({ Title = "Other Drops", Flag = "f_other", Default = true, Callback = function(v) S.f_other = v; settingsVersion = settingsVersion + 1 end })
 
-    local jutsuSec = tab:Section("Jutsu Overhead Tags", "Left")
-    jutsuSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", true)
-    jutsuSec:Toggle("bl_jutsu_box", "Jutsu Background Pill Box", true)
-    jutsuSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val)
-        local n = math.floor(tonumber(val) or 13)
-        UI.SetValue("bl_jutsu_size", n)
-        S.bl_jutsu_size = n
-        settingsVersion = settingsVersion + 1
-    end)
-    jutsuSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", false)
-    jutsuSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (catches instant casts)", true)
+    -- ================= TAB 3: Combat Assists =================
+    local tabCombat = ui:AddTab({ Title = "Combat Assists", Icon = "shield" })
 
-    local inspectSec = tab:Section("Player Profile Inspector", "Left")
-    inspectSec:Toggle("bl_inspect_en", "Leaderboard Click to Inspect", true)
-    inspectSec:Button("Inspect Next Player ->", function()
-        pcall(function() cycleInspectPlayer(1) end)
-    end)
-    inspectSec:Button("Close Profile Card (X)", function()
-        pcall(hideProfileCard)
-    end)
+    local islCfg = tabCombat:AddIsland({ Title = "Combat Settings" })
+    islCfg:AddSlider({
+        Title = "Assists Range",
+        Flag = "bl_combat_dist",
+        Min = 50, Max = 1200, Step = 25,
+        Default = 400,
+        Suffix = " m",
+        Callback = function(v)
+            S.bl_combat_dist = math.floor(tonumber(v) or 400)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islCfg:AddToggle({ Title = "Detect Own Jutsu (Self Test)", Flag = "bl_jutsu_self", Default = false, Callback = function(v) S.bl_jutsu_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({ Title = "Show Own Sub Status", Flag = "bl_sub_self", Default = false, Callback = function(v) S.bl_sub_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({ Title = "Show Own I-Frames", Flag = "bl_iframe_self", Default = false, Callback = function(v) S.bl_iframe_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({ Title = "Show Own Mode Status", Flag = "bl_mode_self", Default = false, Callback = function(v) S.bl_mode_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({ Title = "Show Own Stun Status", Flag = "bl_stun_self", Default = false, Callback = function(v) S.bl_stun_self = v; settingsVersion = settingsVersion + 1 end })
 
-    -- ================= RIGHT COLUMN =================
-    local subSec = tab:Section("Sub Cooldown Tracker", "Right")
-    subSec:Toggle("bl_sub_en", "Opponent Sub Cooldown Tracker", true)
-    subSec:SliderInt("bl_sub_size", "Sub Text Size", 8, 36, getUI("bl_sub_size", 13), function(val)
-        local n = math.floor(tonumber(val) or 13)
-        UI.SetValue("bl_sub_size", n)
-        S.bl_sub_size = n
-        settingsVersion = settingsVersion + 1
-    end)
-    subSec:Toggle("bl_sub_only_cd", "Show Subs Only While On CD", true)
+    local islJutsu = tabCombat:AddIsland({ Title = "Jutsu Overhead Tags" })
+    islJutsu:AddToggle({ Title = "Show Jutsu Above Head", Flag = "bl_jutsu_tag", Default = true, Callback = function(v) S.bl_jutsu_tag = v; settingsVersion = settingsVersion + 1 end })
+    islJutsu:AddToggle({ Title = "Jutsu Background Pill Box", Flag = "bl_jutsu_box", Default = true, Callback = function(v) S.bl_jutsu_box = v; settingsVersion = settingsVersion + 1 end })
+    islJutsu:AddSlider({
+        Title = "Jutsu Text Size",
+        Flag = "bl_jutsu_size",
+        Min = 8, Max = 36, Step = 1,
+        Default = 13,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_jutsu_size = math.floor(tonumber(v) or 13)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islJutsu:AddToggle({ Title = "Jutsu Above Mobs / Bosses Too", Flag = "bl_jutsu_mobs", Default = false, Callback = function(v) S.bl_jutsu_mobs = v; settingsVersion = settingsVersion + 1 end })
+    islJutsu:AddToggle({ Title = "Jutsu Cooldown Scan", Flag = "bl_jutsu_cd", Default = true, Callback = function(v) S.bl_jutsu_cd = v; settingsVersion = settingsVersion + 1 end })
 
-    local iframeSec = tab:Section("I-Frame Indicator", "Right")
-    iframeSec:Toggle("bl_iframe_en", "I-Frame / Invincible Indicator", true)
-    iframeSec:SliderInt("bl_iframe_size", "I-Frame Text Size", 8, 36, getUI("bl_iframe_size", 13), function(val)
-        local n = math.floor(tonumber(val) or 13)
-        UI.SetValue("bl_iframe_size", n)
-        S.bl_iframe_size = n
-        settingsVersion = settingsVersion + 1
-    end)
+    local islSub = tabCombat:AddIsland({ Title = "Sub & I-Frames" })
+    islSub:AddToggle({ Title = "Opponent Sub Cooldown Tracker", Flag = "bl_sub_en", Default = true, Callback = function(v) S.bl_sub_en = v; settingsVersion = settingsVersion + 1 end })
+    islSub:AddSlider({
+        Title = "Sub Text Size",
+        Flag = "bl_sub_size",
+        Min = 8, Max = 36, Step = 1,
+        Default = 13,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_sub_size = math.floor(tonumber(v) or 13)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islSub:AddToggle({ Title = "Show Subs Only While On CD", Flag = "bl_sub_only_cd", Default = true, Callback = function(v) S.bl_sub_only_cd = v; settingsVersion = settingsVersion + 1 end })
+    islSub:AddToggle({ Title = "I-Frame / Invincible Indicator", Flag = "bl_iframe_en", Default = true, Callback = function(v) S.bl_iframe_en = v; settingsVersion = settingsVersion + 1 end })
+    islSub:AddSlider({
+        Title = "I-Frame Text Size",
+        Flag = "bl_iframe_size",
+        Min = 8, Max = 36, Step = 1,
+        Default = 13,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_iframe_size = math.floor(tonumber(v) or 13)
+            settingsVersion = settingsVersion + 1
+        end
+    })
 
-    local modeSec = tab:Section("Awakening / Mode Tracker", "Right")
-    modeSec:Toggle("bl_mode_en", "Awakening / Mode Tracker", true)
-    modeSec:SliderInt("bl_mode_size", "Mode Text Size", 8, 36, getUI("bl_mode_size", 13), function(val)
-        local n = math.floor(tonumber(val) or 13)
-        UI.SetValue("bl_mode_size", n)
-        S.bl_mode_size = n
-        settingsVersion = settingsVersion + 1
-    end)
-    modeSec:Toggle("bl_mode_name", "Track Awakened Mode Name", true)
-    modeSec:Toggle("bl_mode_dur", "Track Mode Active Duration", true)
-    modeSec:Toggle("bl_mode_cd", "Track Awakening Cooldown", true)
+    local islAwaken = tabCombat:AddIsland({ Title = "Awakening & Stun" })
+    islAwaken:AddToggle({ Title = "Awakening / Mode Tracker", Flag = "bl_mode_en", Default = true, Callback = function(v) S.bl_mode_en = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddSlider({
+        Title = "Mode Text Size",
+        Flag = "bl_mode_size",
+        Min = 8, Max = 36, Step = 1,
+        Default = 13,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_mode_size = math.floor(tonumber(v) or 13)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islAwaken:AddToggle({ Title = "Track Awakened Mode Name", Flag = "bl_mode_name", Default = true, Callback = function(v) S.bl_mode_name = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Track Mode Active Duration", Flag = "bl_mode_dur", Default = true, Callback = function(v) S.bl_mode_dur = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Track Awakening Cooldown", Flag = "bl_mode_cd", Default = true, Callback = function(v) S.bl_mode_cd = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Combat Stun Indicators", Flag = "bl_stun_en", Default = true, Callback = function(v) S.bl_stun_en = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddSlider({
+        Title = "Stun Text Size",
+        Flag = "bl_stun_size",
+        Min = 8, Max = 36, Step = 1,
+        Default = 13,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_stun_size = math.floor(tonumber(v) or 13)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islAwaken:AddToggle({ Title = "Show Blocking", Flag = "bl_stun_block", Default = true, Callback = function(v) S.bl_stun_block = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Show HyperArmor", Flag = "bl_stun_hyper", Default = true, Callback = function(v) S.bl_stun_hyper = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Show Stunned & Parried", Flag = "bl_stun_hit", Default = true, Callback = function(v) S.bl_stun_hit = v; settingsVersion = settingsVersion + 1 end })
+    islAwaken:AddToggle({ Title = "Show Knockdown", Flag = "bl_stun_knock", Default = true, Callback = function(v) S.bl_stun_knock = v; settingsVersion = settingsVersion + 1 end })
 
-    local stunSec = tab:Section("Combat Stun & State Indicators", "Right")
-    stunSec:Toggle("bl_stun_en", "Combat Stun Indicators", true)
-    stunSec:SliderInt("bl_stun_size", "Stun Text Size", 8, 36, getUI("bl_stun_size", 13), function(val)
-        local n = math.floor(tonumber(val) or 13)
-        UI.SetValue("bl_stun_size", n)
-        S.bl_stun_size = n
-        settingsVersion = settingsVersion + 1
-    end)
-    stunSec:Toggle("bl_stun_block", "Show Blocking", true)
-    stunSec:Toggle("bl_stun_hyper", "Show HyperArmor", true)
-    stunSec:Toggle("bl_stun_hit", "Show Stunned & Parried", true)
-    stunSec:Toggle("bl_stun_knock", "Show Knockdown", true)
-end)
+    local islInspect = tabCombat:AddIsland({ Title = "Player Profile Inspector" })
+    islInspect:AddToggle({ Title = "Leaderboard Click to Inspect", Flag = "bl_inspect_en", Default = true, Callback = function(v) S.bl_inspect_en = v; settingsVersion = settingsVersion + 1 end })
+    islInspect:AddButton({
+        Title = "Inspect Next Player ->",
+        Callback = function()
+            if cycleInspectPlayer then pcall(cycleInspectPlayer, 1) end
+        end
+    })
+    islInspect:AddButton({
+        Title = "Close Profile Card (X)",
+        Callback = function()
+            if hideProfileCard then pcall(hideProfileCard) end
+        end
+    })
+
+    pcall(function() ui:SetConfig("bloodline_esp") end)
+end
 
 -- ============================================================
 --  DRAWING POOLS (12 Mobs, 16 Items, 8 NPCs, 8 Corrupt)
@@ -1133,9 +1145,10 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_ProfileDrawings = nil
     end
 
-    pcall(function() UI.RemoveTab("Bloodline") end)
-    pcall(function() UI.RemoveTab("Combat Assists") end)
-    pcall(function() UI.RemoveTab("Event Notifier") end)
+    if _G.Bloodline_JDUI then
+        pcall(function() _G.Bloodline_JDUI:Destroy() end)
+        _G.Bloodline_JDUI = nil
+    end
 end
 
 -- ============================================================
@@ -1143,11 +1156,11 @@ end
 -- ============================================================
 local SCAN_INTERVAL     = 0.85   -- pause between full Workspace passes (s)
 local SCAN_SLICE_BUDGET = 0.002  -- max seconds of scan work per frame before yielding
-local SETTINGS_POLL     = 0.10   -- how often UI toggles are re-read (s)
+local SETTINGS_POLL     = 0.40   -- how often UI toggles are re-read (s) (0.40s prevents mutex contention)
 -- MAX_RENDER_FPS and MIN_FRAME_TIME are configured dynamically via settings above
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
-local NEG_TTL_BASE      = 4.0    -- how long "not interesting" objects are skipped (s) ...
-local NEG_TTL_JITTER    = 3.0    -- ... plus up to this much random jitter
+local NEG_TTL_BASE      = 35.0   -- how long "not interesting" objects are skipped (s)
+local NEG_TTL_JITTER    = 15.0   -- ... plus up to this much random jitter
 local ITEM_LIST_CAP     = 200
 
 local floor, clamp, max = math.floor, math.clamp, math.max
@@ -1415,8 +1428,8 @@ local JUTSU_MOB_MAX    = 5
 local PLAYER_REFRESH   = 0.5
 local CS_RECHECK       = 15
 local CD_PLAYERS_MAX   = 8      -- cooldown scan only for the N nearest players
-local CD_PER_CYCLE     = 8      -- scan all eligible nearest players every cycle
-local FRAME_BUDGET     = 0.0010 -- seconds of detector work per frame before yielding
+local CD_PER_CYCLE     = 3      -- round-robin scan across eligible players to minimize CPU spikes
+local FRAME_BUDGET     = 0.0020 -- seconds of detector work per frame before yielding
 local CYCLE_ACTIVE     = 0.12
 local CYCLE_IDLE       = 0.30
 local CYCLE_OFF        = 0.50
@@ -2948,7 +2961,10 @@ local function renderJutsuTags()
                                     t.text = cast.label
                                 end
                                 local tagCol = getJutsuColor(cast.skill)
-                                if t.tag.Color ~= tagCol then t.tag.Color = tagCol end
+                                if t.col ~= tagCol then
+                                    t.col = tagCol
+                                    t.tag.Color = tagCol
+                                end
                                 local tagSize = S.bl_jutsu_size or 13
                                 if t.size ~= tagSize then
                                     t.tag.Size = tagSize
@@ -3603,7 +3619,7 @@ local lastClickM1 = false
 local lastKeyX = false
 local cardScreenPos = Vector2.new(50, 120)
 
-local function hideProfileCard()
+hideProfileCard = function()
     cardVisible = false
     inspectedPlayer = nil
     inspectedCharName = nil
@@ -3896,10 +3912,14 @@ local function showProfileCard(player, charName)
     cardLines[14].Visible = false
 end
 
-local lastHandledM1 = 0
-local lastHandledX = 0
+local lastM1State = false
+local lastXState = false
 
 local function getClickedLeaderboardPlayer(mx, my)
+    local cam = Workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize
+    if vp and mx < (vp.X - 350) then return nil end
+
     local lp = Players.LocalPlayer
     local pListGui = lp and lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("ClientGui")
     local mf = pListGui and pListGui:FindFirstChild("Mainframe")
@@ -3910,11 +3930,19 @@ local function getClickedLeaderboardPlayer(mx, my)
 
     local templates = {}
     for _, c in ipairs(list:GetChildren()) do
-        if c.Name:find("PlayerTemplate") then
+        if c.Name:find("PlayerTemplate") and c.AbsolutePosition then
             local pos = c.AbsolutePosition
-            if pos and isValidVec2(pos) then
-                table.insert(templates, { btn = c, y = pos.Y, x = pos.X })
-            end
+            local sz = c.AbsoluteSize
+            local w = (sz and sz.X > 0) and sz.X or 300
+            local h = (sz and sz.Y > 0) and sz.Y or 28
+            table.insert(templates, {
+                btn = c,
+                minX = pos.X - 15,
+                maxX = pos.X + w + 15,
+                minY = pos.Y - 4,
+                maxY = pos.Y + h + 4,
+                y = pos.Y
+            })
         end
     end
     if #templates == 0 then return nil end
@@ -3922,8 +3950,7 @@ local function getClickedLeaderboardPlayer(mx, my)
 
     local allPlayers = Players:GetPlayers()
     for idx, t in ipairs(templates) do
-        -- Bounding box check on leaderboard row
-        if mx >= (t.x - 25) and mx <= (t.x + 320) and my >= (t.y - 4) and my <= (t.y + 30) then
+        if mx >= t.minX and mx <= t.maxX and my >= t.minY and my <= t.maxY then
             local pNameObj = t.btn:FindFirstChild("PlayerName")
             local charName = pNameObj and pNameObj.Text
             local matched = nil
@@ -3937,8 +3964,8 @@ local function getClickedLeaderboardPlayer(mx, my)
                     end
                 end
             end
-            if not matched then
-                matched = allPlayers[idx]
+            if not matched and #allPlayers > 0 then
+                matched = allPlayers[((idx - 1) % #allPlayers) + 1]
             end
             if matched then
                 return matched, charName
@@ -3949,6 +3976,9 @@ local function getClickedLeaderboardPlayer(mx, my)
 end
 
 local function handleLeftClick(mx, my)
+    -- If JDUI menu is open, let user interact with JDUI without triggering inspector
+    if ui and ui.IsOpen and ui:IsOpen() then return false end
+
     -- 1. Check if clicking on Card Close [X] button
     if cardVisible then
         if mx >= (cardScreenPos.X + CARD_W - 85) and mx <= (cardScreenPos.X + CARD_W + 10)
@@ -3973,7 +4003,7 @@ local function handleLeftClick(mx, my)
         end
     end
 
-    -- 3. If card is visible and clicking outside of card, close card
+    -- 3. If card is visible and clicking outside of card, close card ("unsee it by clicking off")
     if cardVisible then
         if mx < (cardScreenPos.X - 10) or mx > (cardScreenPos.X + CARD_W + 10)
            or my < (cardScreenPos.Y - 10) or my > (cardScreenPos.Y + CARD_H + 10) then
@@ -3988,33 +4018,27 @@ local function handleXKey()
     if cardVisible then hideProfileCard() end
 end
 
--- Native event connection via UserInputService for reliable click capture
+-- Fallback native event connection via UserInputService
 if _G.Bloodline_inputConn then
     pcall(function() _G.Bloodline_inputConn:Disconnect() end)
     _G.Bloodline_inputConn = nil
 end
 _G.Bloodline_inputConn = UserInputService.InputBegan:Connect(function(input)
-    local now = os.clock()
     local itype = input.UserInputType
     if itype == Enum.UserInputType.MouseButton1 then
-        if (now - lastHandledM1) >= 0.12 then
-            lastHandledM1 = now
-            local mPos = UserInputService:GetMouseLocation()
-            local mx = (input.Position and input.Position.X) or mPos.X
-            local my = (input.Position and input.Position.Y) or mPos.Y
-            handleLeftClick(mx, my)
-        end
+        local lp = Players.LocalPlayer
+        local mouse = lp and lp:GetMouse()
+        local mx = (input.Position and input.Position.X) or (mouse and mouse.X) or 0
+        local my = (input.Position and input.Position.Y) or (mouse and mouse.Y) or 0
+        pcall(handleLeftClick, mx, my)
     elseif itype == Enum.UserInputType.Keyboard then
         if input.KeyCode == Enum.KeyCode.X then
-            if (now - lastHandledX) >= 0.2 then
-                lastHandledX = now
-                handleXKey()
-            end
+            pcall(handleXKey)
         end
     end
 end)
 
-local function cycleInspectPlayer(delta)
+cycleInspectPlayer = function(delta)
     local all = Players:GetPlayers()
     if #all == 0 then return end
     local curIdx = 1
@@ -4025,34 +4049,6 @@ local function cycleInspectPlayer(delta)
     end
     local nextIdx = ((curIdx - 1 + delta) % #all) + 1
     showProfileCard(all[nextIdx])
-end
-
-local function updateInput()
-    local now = os.clock()
-
-    -- Polling fallback for Keybind X
-    local xPressed = iskeypressed and (iskeypressed(0x58) or iskeypressed(88)) or false
-    if xPressed and not lastKeyX then
-        if (now - lastHandledX) >= 0.2 then
-            lastHandledX = now
-            handleXKey()
-        end
-    end
-    lastKeyX = xPressed
-
-    -- Polling fallback for Mouse Left Click
-    local m1 = ismouse1pressed and ismouse1pressed() or false
-    local mPos = UserInputService:GetMouseLocation()
-    local mx = mPos.X
-    local my = mPos.Y
-
-    if m1 and not lastClickM1 then
-        if (now - lastHandledM1) >= 0.12 then
-            lastHandledM1 = now
-            handleLeftClick(mx, my)
-        end
-    end
-    lastClickM1 = m1
 end
 
 -- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
@@ -4134,7 +4130,6 @@ local function renderFrame()
     pcall(renderIFrameTags)
     pcall(renderModeTags)
     pcall(renderStunTags)
-    pcall(updateInput)
 end
 
 _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
@@ -4144,6 +4139,27 @@ _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
             _G.Bloodline_cleanup = nil
         end
         return
+    end
+
+    -- Direct hardware click & key detection (0ms latency, bypasses Roblox GUI input sinks)
+    if ismouse1pressed then
+        local isM1 = ismouse1pressed()
+        if isM1 and not lastM1State then
+            local lp = Players.LocalPlayer
+            local mouse = lp and lp:GetMouse()
+            if mouse then
+                pcall(handleLeftClick, mouse.X, mouse.Y)
+            end
+        end
+        lastM1State = isM1
+    end
+
+    if iskeypressed then
+        local isX = iskeypressed(0x58) -- VK_KEY_X
+        if isX and not lastXState then
+            if cardVisible then pcall(hideProfileCard) end
+        end
+        lastXState = isX
     end
 
     -- Frame limiter: 15% tolerance below the cap so it follows your display refresh rate
