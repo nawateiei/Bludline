@@ -13,15 +13,30 @@ if _G.Bloodline_cleanup then
     pcall(_G.Bloodline_cleanup)
     _G.Bloodline_cleanup = nil
 end
+_G.Bloodline_running = false
+_G.Bloodline_gen = (_G.Bloodline_gen or 0) + 1
 
 pcall(function() UI.RemoveTab("Bloodline") end)
 pcall(function() UI.RemoveTab("Combat Assists") end)
 pcall(function() UI.RemoveTab("Event Notifier") end)
 
-local RunService = game:GetService("RunService")
-local Players    = game:GetService("Players")
-local Workspace  = game:GetService("Workspace")
+-- Gracefully wait until the game world, player, and camera are fully loaded (essential on server hop / re-exec)
+if pcall(function() return game:IsLoaded() end) then
+    while not game:IsLoaded() do
+        task.wait(0.2)
+    end
+end
+
+local RunService       = game:GetService("RunService")
+local Players          = game:GetService("Players")
+local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+
+local lpWait = 0
+while (not Players.LocalPlayer or not Workspace.CurrentCamera) and lpWait < 40 do
+    task.wait(0.1)
+    lpWait = lpWait + 1
+end
 
 -- In-memory / Console Debug Logger (rate-limited, zero disk-I/O stutter)
 local lastLogMsg, lastLogAt = "", -100
@@ -933,11 +948,28 @@ _G.Bloodline_eventTag    = eventTag
 _G.Bloodline_eventTracer = eventTracer
 _G.Bloodline_running     = true
 
--- Generation token: when the script is re-executed, old loops stop instead of running next to the new ones.
+-- Generation token and Server JobId check:
+local INITIAL_JOB_ID = tostring(game.JobId or "")
 local MY_GEN = (_G.Bloodline_gen or 0) + 1
 _G.Bloodline_gen = MY_GEN
+
 local function alive()
-    return _G.Bloodline_running == true and _G.Bloodline_gen == MY_GEN
+    if _G.Bloodline_running ~= true or _G.Bloodline_gen ~= MY_GEN then
+        return false
+    end
+    -- If server changed (server hop / teleport), terminate loops immediately
+    local currentJob = tostring(game.JobId or "")
+    if INITIAL_JOB_ID ~= "" and currentJob ~= "" and currentJob ~= INITIAL_JOB_ID then
+        return false
+    end
+    return true
+end
+
+local function safeRemove(d)
+    if d then
+        pcall(function() d.Visible = false end)
+        pcall(function() d:Remove() end)
+    end
 end
 
 -- ============================================================
@@ -958,105 +990,105 @@ _G.Bloodline_cleanup = function()
     end
 
     if _G.Bloodline_csHudTitle then
-        pcall(function() _G.Bloodline_csHudTitle:Remove() end)
+        safeRemove(_G.Bloodline_csHudTitle)
         _G.Bloodline_csHudTitle = nil
     end
 
     if _G.Bloodline_csHudContent then
-        pcall(function() _G.Bloodline_csHudContent:Remove() end)
+        safeRemove(_G.Bloodline_csHudContent)
         _G.Bloodline_csHudContent = nil
     end
 
     if _G.Bloodline_JutsuRadar and _G.Bloodline_JutsuRadar.tags then
         for i = 1, #_G.Bloodline_JutsuRadar.tags do
             local it = _G.Bloodline_JutsuRadar.tags[i]
-            pcall(function() it.tag:Remove() end)
-            if it.box then pcall(function() it.box:Remove() end) end
+            safeRemove(it.tag)
+            if it.box then safeRemove(it.box) end
         end
         _G.Bloodline_JutsuRadar = nil
     end
 
     if _G.Bloodline_SubRadar and _G.Bloodline_SubRadar.tags then
         for i = 1, #_G.Bloodline_SubRadar.tags do
-            pcall(function() _G.Bloodline_SubRadar.tags[i].tag:Remove() end)
+            safeRemove(_G.Bloodline_SubRadar.tags[i].tag)
         end
         _G.Bloodline_SubRadar = nil
     end
 
     if _G.Bloodline_IFrameRadar and _G.Bloodline_IFrameRadar.tags then
         for i = 1, #_G.Bloodline_IFrameRadar.tags do
-            pcall(function() _G.Bloodline_IFrameRadar.tags[i].tag:Remove() end)
+            safeRemove(_G.Bloodline_IFrameRadar.tags[i].tag)
         end
         _G.Bloodline_IFrameRadar = nil
     end
 
     if _G.Bloodline_ModeRadar and _G.Bloodline_ModeRadar.tags then
         for i = 1, #_G.Bloodline_ModeRadar.tags do
-            pcall(function() _G.Bloodline_ModeRadar.tags[i].tag:Remove() end)
+            safeRemove(_G.Bloodline_ModeRadar.tags[i].tag)
         end
         _G.Bloodline_ModeRadar = nil
     end
 
     if _G.Bloodline_StunRadar and _G.Bloodline_StunRadar.tags then
         for i = 1, #_G.Bloodline_StunRadar.tags do
-            pcall(function() _G.Bloodline_StunRadar.tags[i].tag:Remove() end)
+            safeRemove(_G.Bloodline_StunRadar.tags[i].tag)
         end
         _G.Bloodline_StunRadar = nil
     end
 
     if _G.Bloodline_eventBox then
-        pcall(function() _G.Bloodline_eventBox:Remove() end)
+        safeRemove(_G.Bloodline_eventBox)
         _G.Bloodline_eventBox = nil
     end
 
     if _G.Bloodline_eventTag then
-        pcall(function() _G.Bloodline_eventTag:Remove() end)
+        safeRemove(_G.Bloodline_eventTag)
         _G.Bloodline_eventTag = nil
     end
 
     if _G.Bloodline_eventTracer then
-        pcall(function() _G.Bloodline_eventTracer:Remove() end)
+        safeRemove(_G.Bloodline_eventTracer)
         _G.Bloodline_eventTracer = nil
     end
 
     if _G.Bloodline_mobPool then
         for _, s in ipairs(_G.Bloodline_mobPool) do
-            pcall(function() s.box:Remove(); s.barBg:Remove(); s.bar:Remove(); s.tag:Remove() end)
+            safeRemove(s.box); safeRemove(s.barBg); safeRemove(s.bar); safeRemove(s.tag)
         end
         _G.Bloodline_mobPool = nil
     end
 
     if _G.Bloodline_corruptPool then
         for _, s in ipairs(_G.Bloodline_corruptPool) do
-            pcall(function() s.box:Remove(); s.tag:Remove() end)
+            safeRemove(s.box); safeRemove(s.tag)
         end
         _G.Bloodline_corruptPool = nil
     end
 
     if _G.Bloodline_riftPool then
         for _, s in ipairs(_G.Bloodline_riftPool) do
-            pcall(function() s.box:Remove(); s.tag:Remove(); s.tracer:Remove() end)
+            safeRemove(s.box); safeRemove(s.tag); safeRemove(s.tracer)
         end
         _G.Bloodline_riftPool = nil
     end
 
     if _G.Bloodline_npcPool then
         for _, s in ipairs(_G.Bloodline_npcPool) do
-            pcall(function() s.box:Remove(); s.tag:Remove() end)
+            safeRemove(s.box); safeRemove(s.tag)
         end
         _G.Bloodline_npcPool = nil
     end
 
     if _G.Bloodline_itemPool then
         for _, s in ipairs(_G.Bloodline_itemPool) do
-            pcall(function() s.box:Remove(); s.tag:Remove(); s.tracer:Remove() end)
+            safeRemove(s.box); safeRemove(s.tag); safeRemove(s.tracer)
         end
         _G.Bloodline_itemPool = nil
     end
 
     if _G.Bloodline_ProfileDrawings then
         for _, d in ipairs(_G.Bloodline_ProfileDrawings) do
-            pcall(function() d:Remove() end)
+            safeRemove(d)
         end
         _G.Bloodline_ProfileDrawings = nil
     end
@@ -1069,8 +1101,8 @@ end
 -- ============================================================
 --  TUNING
 -- ============================================================
-local SCAN_INTERVAL     = 0.30   -- pause between full Workspace passes (s)
-local SCAN_SLICE_BUDGET = 0.003  -- max seconds of scan work per frame before yielding
+local SCAN_INTERVAL     = 0.85   -- pause between full Workspace passes (s)
+local SCAN_SLICE_BUDGET = 0.002  -- max seconds of scan work per frame before yielding
 local SETTINGS_POLL     = 0.10   -- how often UI toggles are re-read (s)
 local MAX_RENDER_FPS    = 90     -- renderer cap (0 = uncapped)
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
@@ -2190,7 +2222,7 @@ local function runScanPass()
             if not ok then
                 _G.Bloodline_objErrors = (_G.Bloodline_objErrors or 0) + 1
             end
-            if (i % 8 == 0) and (t - sliceStart) > SCAN_SLICE_BUDGET then
+            if (i % 16 == 0) and (t - sliceStart) > SCAN_SLICE_BUDGET then
                 task.wait()
                 if not alive() then return end
                 sliceStart = os.clock()
@@ -2966,7 +2998,7 @@ local function renderSubTags()
                 local root = roots[pn]
                 if root then
                     local sc = SubRadar.cache[pn]
-                    if not sc or (rNow - (SubRadar.cacheAt[pn] or 0)) > 15 then
+                    if (rNow - (SubRadar.cacheAt[pn] or 0)) > 8.0 then
                         local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
                         local f = rsSettings and rsSettings:FindFirstChild(pn)
                         sc = f and f:FindFirstChild("SubCooldown")
@@ -3089,7 +3121,7 @@ local function renderIFrameTags()
                 local root = roots[pn]
                 if root then
                     local inv = IFrameRadar.cache[pn]
-                    if not inv or (rNow - (IFrameRadar.cacheAt[pn] or 0)) > 15 then
+                    if (rNow - (IFrameRadar.cacheAt[pn] or 0)) > 8.0 then
                         local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
                         local f = rsSettings and rsSettings:FindFirstChild(pn)
                         inv = f and f:FindFirstChild("Invincible")
@@ -3188,7 +3220,7 @@ local function renderModeTags()
                 local root = roots[pn]
                 if root then
                     local entry = ModeRadar.cache[pn]
-                    if not entry or (rNow - (ModeRadar.cacheAt[pn] or 0)) > 15 then
+                    if not entry or (rNow - (ModeRadar.cacheAt[pn] or 0)) > 8.0 then
                         local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
                         local f = rsSettings and rsSettings:FindFirstChild(pn)
                         entry = {
@@ -3318,7 +3350,7 @@ local function renderStunTags()
                 local root = roots[pn]
                 if root then
                     local entry = StunRadar.cache[pn]
-                    if not entry or (rNow - (StunRadar.cacheAt[pn] or 0)) > 15 then
+                    if not entry or (rNow - (StunRadar.cacheAt[pn] or 0)) > 8.0 then
                         local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
                         local f = rsSettings and rsSettings:FindFirstChild(pn)
                         entry = {
@@ -3927,9 +3959,9 @@ _G.Bloodline_inputConn = UserInputService.InputBegan:Connect(function(input)
     if itype == Enum.UserInputType.MouseButton1 then
         if (now - lastHandledM1) >= 0.12 then
             lastHandledM1 = now
-            local mouse = Players.LocalPlayer:GetMouse()
-            local mx = (input.Position and input.Position.X) or (mouse and mouse.X) or 0
-            local my = (input.Position and input.Position.Y) or (mouse and mouse.Y) or 0
+            local mPos = UserInputService:GetMouseLocation()
+            local mx = (input.Position and input.Position.X) or mPos.X
+            local my = (input.Position and input.Position.Y) or mPos.Y
             handleLeftClick(mx, my)
         end
     elseif itype == Enum.UserInputType.Keyboard then
@@ -3970,9 +4002,9 @@ local function updateInput()
 
     -- Polling fallback for Mouse Left Click
     local m1 = ismouse1pressed and ismouse1pressed() or false
-    local mouse = Players.LocalPlayer:GetMouse()
-    local mx = mouse and mouse.X or 0
-    local my = mouse and mouse.Y or 0
+    local mPos = UserInputService:GetMouseLocation()
+    local mx = mPos.X
+    local my = mPos.Y
 
     if m1 and not lastClickM1 then
         if (now - lastHandledM1) >= 0.12 then
@@ -4066,7 +4098,13 @@ local function renderFrame()
 end
 
 _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
-    if not alive() then return end
+    if not alive() then
+        if _G.Bloodline_cleanup then
+            pcall(_G.Bloodline_cleanup)
+            _G.Bloodline_cleanup = nil
+        end
+        return
+    end
 
     -- Frame limiter: 15% tolerance below the cap so it follows your display refresh rate
     local now = os.clock()
