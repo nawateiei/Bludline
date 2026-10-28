@@ -15,32 +15,27 @@ if _G.Bloodline_cleanup then
 end
 
 pcall(function() UI.RemoveTab("Bloodline") end)
+pcall(function() UI.RemoveTab("Combat Assists") end)
 pcall(function() UI.RemoveTab("Event Notifier") end)
 
 local RunService = game:GetService("RunService")
 local Players    = game:GetService("Players")
 local Workspace  = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
 
--- Persistent Debug Logger (rate-limited)
+-- In-memory / Console Debug Logger (rate-limited, zero disk-I/O stutter)
 local lastLogMsg, lastLogAt = "", -100
-local function writeLogLine(line)
-    appendfile("bloodline_debug.txt", line)
-end
 local function logDebug(msg, force)
     msg = tostring(msg)
     local now = os.clock()
     if not force then
-        if (now - lastLogAt) < 0.5 then return end
-        if msg == lastLogMsg and (now - lastLogAt) < 5 then return end
+        if (now - lastLogAt) < 1.0 then return end
+        if msg == lastLogMsg and (now - lastLogAt) < 10 then return end
     end
     lastLogMsg = msg
     lastLogAt = now
-    pcall(writeLogLine, string.format("[%s] %s\n", os.date("%X"), msg))
+    warn("[Bloodline] " .. msg)
 end
-
-pcall(function()
-    writefile("bloodline_debug.txt", string.format("=== Bloodline Two-Loop Engine Started at %s ===\n", os.date("%Y-%m-%d %X")))
-end)
 
 -- IEEE-754 Validation Helpers
 local function isValidNum(n)
@@ -377,6 +372,14 @@ initUI("bl_mode_dur", true)
 initUI("bl_mode_cd", true)
 initUI("bl_mode_size", 13)
 initUI("bl_mode_self", false)
+initUI("bl_stun_en", true)
+initUI("bl_stun_size", 13)
+initUI("bl_stun_block", true)
+initUI("bl_stun_hyper", true)
+initUI("bl_stun_hit", true)
+initUI("bl_stun_knock", true)
+initUI("bl_stun_self", false)
+initUI("bl_inspect_en", true)
 
 -- Apply requested defaults
 if UI.GetValue("bl_v9_defaults") ~= true then
@@ -388,6 +391,7 @@ if UI.GetValue("bl_v9_defaults") ~= true then
     UI.SetValue("bl_sub_self", false)
     UI.SetValue("bl_iframe_self", false)
     UI.SetValue("bl_mode_self", false)
+    UI.SetValue("bl_stun_self", false)
     UI.SetValue("bl_sub_only_cd", true)
     UI.SetValue("bl_combat_dist", 400)
     UI.SetValue("bl_npc_box", false)
@@ -426,6 +430,8 @@ local SETTING_DEFAULTS = {
     {"bl_sub_en", true}, {"bl_sub_size", 13}, {"bl_sub_only_cd", true}, {"bl_sub_self", false},
     {"bl_iframe_en", true}, {"bl_iframe_size", 13}, {"bl_iframe_self", false},
     {"bl_mode_en", true}, {"bl_mode_name", true}, {"bl_mode_dur", true}, {"bl_mode_cd", true}, {"bl_mode_size", 13}, {"bl_mode_self", false},
+    {"bl_stun_en", true}, {"bl_stun_size", 13}, {"bl_stun_block", true}, {"bl_stun_hyper", true}, {"bl_stun_hit", true}, {"bl_stun_knock", true}, {"bl_stun_self", false},
+    {"bl_inspect_en", true},
 }
 
 local function refreshSettings()
@@ -433,6 +439,9 @@ local function refreshSettings()
     for i = 1, #SETTING_DEFAULTS do
         local d = SETTING_DEFAULTS[i]
         local v = getUI(d[1], d[2])
+        if type(v) == "number" and d[1]:find("size") then
+            v = math.floor(v)
+        end
         if S[d[1]] ~= v then
             S[d[1]] = v
             changed = true
@@ -446,100 +455,160 @@ refreshSettings()
 UI.AddTab("Bloodline", function(tab)
     -- ================= LEFT COLUMN =================
     local mobSec = tab:Section("Combat Mobs ESP", "Left")
-    mobSec:Toggle("bl_mob_en", "Combat Mobs Enabled", getUI("bl_mob_en", true), function(v) UI.SetValue("bl_mob_en", v) end)
+    mobSec:Toggle("bl_mob_en", "Combat Mobs Enabled", true)
     mobSec:Keybind("bl_mob_kb", 0, "toggle")
-    mobSec:Toggle("bl_mob_box", "Show Boxes", getUI("bl_mob_box", true), function(v) UI.SetValue("bl_mob_box", v) end)
-    mobSec:ColorPicker("bl_mob_col", 1, 0.23, 0.23, 1, function() end)
-    mobSec:Toggle("bl_mob_name", "Show Name", getUI("bl_mob_name", true), function(v) UI.SetValue("bl_mob_name", v) end)
-    mobSec:Toggle("bl_mob_hp_t", "Show HP Text", getUI("bl_mob_hp_t", true), function(v) UI.SetValue("bl_mob_hp_t", v) end)
-    mobSec:Toggle("bl_mob_hp_b", "Show Health Bar", getUI("bl_mob_hp_b", true), function(v) UI.SetValue("bl_mob_hp_b", v) end)
-    mobSec:Toggle("bl_mob_dist", "Show Distance", getUI("bl_mob_dist", true), function(v) UI.SetValue("bl_mob_dist", v) end)
-    mobSec:Toggle("bl_mob_clean", "Clean Name Numbers", getUI("bl_mob_clean", true), function(v) UI.SetValue("bl_mob_clean", v) end)
-    mobSec:Toggle("bl_mob_boss", "Bosses Only (>500 HP)", getUI("bl_mob_boss", false), function(v) UI.SetValue("bl_mob_boss", v) end)
+    mobSec:Toggle("bl_mob_box", "Show Boxes", true)
+    mobSec:ColorPicker("bl_mob_col", 1, 0.23, 0.23, 1)
+    mobSec:Toggle("bl_mob_name", "Show Name", true)
+    mobSec:Toggle("bl_mob_hp_t", "Show HP Text", true)
+    mobSec:Toggle("bl_mob_hp_b", "Show Health Bar", true)
+    mobSec:Toggle("bl_mob_dist", "Show Distance", true)
+    mobSec:Toggle("bl_mob_clean", "Clean Name Numbers", true)
+    mobSec:Toggle("bl_mob_boss", "Bosses Only (>500 HP)", false)
 
     local corruptSec = tab:Section("Corruption Points", "Left")
-    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", getUI("bl_corrupt_en", true), function(v) UI.SetValue("bl_corrupt_en", v) end)
+    corruptSec:Toggle("bl_corrupt_en", "Corruption Points Enabled", true)
     corruptSec:Keybind("bl_corrupt_kb", 0, "toggle")
-    corruptSec:Toggle("bl_corrupt_box", "Show Boxes", getUI("bl_corrupt_box", true), function(v) UI.SetValue("bl_corrupt_box", v) end)
-    corruptSec:ColorPicker("bl_corrupt_col", 0.68, 0.17, 1.0, 1, function() end)
-    corruptSec:Toggle("bl_corrupt_name", "Show Name", getUI("bl_corrupt_name", true), function(v) UI.SetValue("bl_corrupt_name", v) end)
-    corruptSec:Toggle("bl_corrupt_hp", "Show HP / Progress", getUI("bl_corrupt_hp", true), function(v) UI.SetValue("bl_corrupt_hp", v) end)
-    corruptSec:Toggle("bl_corrupt_progress", "Show as Progress % (0-100%)", getUI("bl_corrupt_progress", true), function(v) UI.SetValue("bl_corrupt_progress", v) end)
-    corruptSec:Toggle("bl_corrupt_dist", "Show Distance", getUI("bl_corrupt_dist", true), function(v) UI.SetValue("bl_corrupt_dist", v) end)
-    corruptSec:Toggle("bl_corrupt_dest", "Hide If Destroyed", getUI("bl_corrupt_dest", true), function(v) UI.SetValue("bl_corrupt_dest", v) end)
-    corruptSec:Toggle("bl_ev_pumpkin", "Pumpkin Point Notify", getUI("bl_ev_pumpkin", true), function(v) UI.SetValue("bl_ev_pumpkin", v) end)
+    corruptSec:Toggle("bl_corrupt_box", "Show Boxes", true)
+    corruptSec:ColorPicker("bl_corrupt_col", 0.68, 0.17, 1.0, 1)
+    corruptSec:Toggle("bl_corrupt_name", "Show Name", true)
+    corruptSec:Toggle("bl_corrupt_hp", "Show HP / Progress", true)
+    corruptSec:Toggle("bl_corrupt_progress", "Show as Progress % (0-100%)", true)
+    corruptSec:Toggle("bl_corrupt_dist", "Show Distance", true)
+    corruptSec:Toggle("bl_corrupt_dest", "Hide If Destroyed", true)
+    corruptSec:Toggle("bl_ev_pumpkin", "Pumpkin Point Notify", true)
 
     local riftSec = tab:Section("Event Rifts & Portals", "Left")
-    riftSec:Toggle("bl_rift_en", "Event Portals / Rifts Enabled", getUI("bl_rift_en", true), function(v) UI.SetValue("bl_rift_en", v) end)
+    riftSec:Toggle("bl_rift_en", "Event Portals / Rifts Enabled", true)
     riftSec:Keybind("bl_rift_kb", 0, "toggle")
-    riftSec:Toggle("bl_rift_box", "Show Boxes", getUI("bl_rift_box", true), function(v) UI.SetValue("bl_rift_box", v) end)
-    riftSec:ColorPicker("bl_rift_col", 1.0, 0.25, 0.08, 1, function() end)
-    riftSec:Toggle("bl_rift_name", "Show Name", getUI("bl_rift_name", true), function(v) UI.SetValue("bl_rift_name", v) end)
-    riftSec:Toggle("bl_rift_dist", "Show Distance", getUI("bl_rift_dist", true), function(v) UI.SetValue("bl_rift_dist", v) end)
-    riftSec:Toggle("bl_rift_trc", "Directional Tracer", getUI("bl_rift_trc", false), function(v) UI.SetValue("bl_rift_trc", v) end)
-    riftSec:Toggle("bl_rift_notify", "Spawn Alert Notify", getUI("bl_rift_notify", true), function(v) UI.SetValue("bl_rift_notify", v) end)
-
-    local combatSec = tab:Section("Combat Assists", "Left")
-    combatSec:SliderInt("bl_combat_dist", "Combat Assists Range", 50, 1200, getUI("bl_combat_dist", 400), function(val) UI.SetValue("bl_combat_dist", val) end)
-    combatSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", getUI("bl_jutsu_tag", true), function(v) UI.SetValue("bl_jutsu_tag", v) end)
-    combatSec:Toggle("bl_jutsu_box", "Jutsu Background Pill Box", getUI("bl_jutsu_box", true), function(v) UI.SetValue("bl_jutsu_box", v) end)
-    combatSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val) UI.SetValue("bl_jutsu_size", val) end)
-    combatSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", getUI("bl_jutsu_self", false), function(v) UI.SetValue("bl_jutsu_self", v) end)
-    combatSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", getUI("bl_jutsu_mobs", false), function(v) UI.SetValue("bl_jutsu_mobs", v) end)
-    combatSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (heavier, catches instant casts)", getUI("bl_jutsu_cd", true), function(v) UI.SetValue("bl_jutsu_cd", v) end)
-    combatSec:Toggle("bl_sub_en", "Opponent Sub Cooldown Tracker", getUI("bl_sub_en", true), function(v) UI.SetValue("bl_sub_en", v) end)
-    combatSec:SliderInt("bl_sub_size", "Sub Text Size", 8, 36, getUI("bl_sub_size", 13), function(val) UI.SetValue("bl_sub_size", val) end)
-    combatSec:Toggle("bl_sub_only_cd", "Show Subs Only While On CD", getUI("bl_sub_only_cd", true), function(v) UI.SetValue("bl_sub_only_cd", v) end)
-    combatSec:Toggle("bl_sub_self", "Show Own Sub Status", getUI("bl_sub_self", false), function(v) UI.SetValue("bl_sub_self", v) end)
-    combatSec:Toggle("bl_iframe_en", "I-Frame / Invincible Indicator", getUI("bl_iframe_en", true), function(v) UI.SetValue("bl_iframe_en", v) end)
-    combatSec:SliderInt("bl_iframe_size", "I-Frame Text Size", 8, 36, getUI("bl_iframe_size", 13), function(val) UI.SetValue("bl_iframe_size", val) end)
-    combatSec:Toggle("bl_iframe_self", "Show Own I-Frames", getUI("bl_iframe_self", false), function(v) UI.SetValue("bl_iframe_self", v) end)
-    combatSec:Toggle("bl_mode_en", "Awakening / Mode Tracker", getUI("bl_mode_en", true), function(v) UI.SetValue("bl_mode_en", v) end)
-    combatSec:SliderInt("bl_mode_size", "Mode Text Size", 8, 36, getUI("bl_mode_size", 13), function(val) UI.SetValue("bl_mode_size", val) end)
-    combatSec:Toggle("bl_mode_name", "Track Awakened Mode Name", getUI("bl_mode_name", true), function(v) UI.SetValue("bl_mode_name", v) end)
-    combatSec:Toggle("bl_mode_dur", "Track Mode Active Duration", getUI("bl_mode_dur", true), function(v) UI.SetValue("bl_mode_dur", v) end)
-    combatSec:Toggle("bl_mode_cd", "Track Awakening Cooldown", getUI("bl_mode_cd", true), function(v) UI.SetValue("bl_mode_cd", v) end)
-    combatSec:Toggle("bl_mode_self", "Show Own Mode Status", getUI("bl_mode_self", false), function(v) UI.SetValue("bl_mode_self", v) end)
+    riftSec:Toggle("bl_rift_box", "Show Boxes", true)
+    riftSec:ColorPicker("bl_rift_col", 1.0, 0.25, 0.08, 1)
+    riftSec:Toggle("bl_rift_name", "Show Name", true)
+    riftSec:Toggle("bl_rift_dist", "Show Distance", true)
+    riftSec:Toggle("bl_rift_trc", "Directional Tracer", false)
+    riftSec:Toggle("bl_rift_notify", "Spawn Alert Notify", true)
 
     local csSec = tab:Section("Chakra Sense Radar", "Left")
-    csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", getUI("bl_cs_en", true), function(v) UI.SetValue("bl_cs_en", v) end)
-    csSec:Toggle("bl_cs_notify", "Notify On Detected", getUI("bl_cs_notify", true), function(v) UI.SetValue("bl_cs_notify", v) end)
-    csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", getUI("bl_cs_use_notify", true), function(v) UI.SetValue("bl_cs_use_notify", v) end)
-    csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", getUI("bl_cs_hud", true), function(v) UI.SetValue("bl_cs_hud", v) end)
+    csSec:Toggle("bl_cs_en", "Chakra Radar Enabled", true)
+    csSec:Toggle("bl_cs_notify", "Notify On Detected", true)
+    csSec:Toggle("bl_cs_use_notify", "Notify On Active Cast", true)
+    csSec:Toggle("bl_cs_hud", "Show Screen Overlay HUD", true)
 
     -- ================= RIGHT COLUMN =================
     local npcSec = tab:Section("Town & Friendly NPCs", "Right")
-    npcSec:Toggle("bl_npc_en", "NPCs Enabled", getUI("bl_npc_en", false), function(v) UI.SetValue("bl_npc_en", v) end)
+    npcSec:Toggle("bl_npc_en", "NPCs Enabled", false)
     npcSec:Keybind("bl_npc_kb", 0, "toggle")
-    npcSec:Toggle("bl_npc_box", "Show Boxes", getUI("bl_npc_box", false), function(v) UI.SetValue("bl_npc_box", v) end)
-    npcSec:ColorPicker("bl_npc_col", 0, 0.82, 1.0, 1, function() end)
-    npcSec:Toggle("bl_npc_name", "Show Name", getUI("bl_npc_name", true), function(v) UI.SetValue("bl_npc_name", v) end)
-    npcSec:Toggle("bl_npc_dist", "Show Distance", getUI("bl_npc_dist", true), function(v) UI.SetValue("bl_npc_dist", v) end)
+    npcSec:Toggle("bl_npc_box", "Show Boxes", false)
+    npcSec:ColorPicker("bl_npc_col", 0, 0.82, 1.0, 1)
+    npcSec:Toggle("bl_npc_name", "Show Name", true)
+    npcSec:Toggle("bl_npc_dist", "Show Distance", true)
 
     local rareSec = tab:Section("Rare Items & Alerts", "Right")
-    rareSec:Toggle("bl_rare_notif", "Proximity Notify Popup", getUI("bl_rare_notif", true), function(v) UI.SetValue("bl_rare_notif", v) end)
-    rareSec:Toggle("bl_rare_trc", "Directional Tracer Lines", getUI("bl_rare_trc", true), function(v) UI.SetValue("bl_rare_trc", v) end)
-    rareSec:Toggle("bl_r_life", "Life Up Fruit", getUI("bl_r_life", true), function(v) UI.SetValue("bl_r_life", v) end)
-    rareSec:Toggle("bl_r_forg", "Fruit of Forgetfulness", getUI("bl_r_forg", true), function(v) UI.SetValue("bl_r_forg", v) end)
-    rareSec:Toggle("bl_r_chak", "Chakra Fruit", getUI("bl_r_chak", true), function(v) UI.SetValue("bl_r_chak", v) end)
-    rareSec:Toggle("bl_r_scrl", "Scrolls (Mastery/Trait/Summon)", getUI("bl_r_scrl", true), function(v) UI.SetValue("bl_r_scrl", v) end)
-    rareSec:Toggle("bl_r_rings", "Rare Rings", getUI("bl_r_rings", true), function(v) UI.SetValue("bl_r_rings", v) end)
-    rareSec:Toggle("bl_r_schem", "Schematics", getUI("bl_r_schem", true), function(v) UI.SetValue("bl_r_schem", v) end)
-    rareSec:Toggle("bl_r_eyes", "Rare Eyes (Sharingan, Rinnegan...)", getUI("bl_r_eyes", true), function(v) UI.SetValue("bl_r_eyes", v) end)
-    rareSec:Toggle("bl_ev_beast_tamer", "Beast Tamer Event Notify", getUI("bl_ev_beast_tamer", true), function(v) UI.SetValue("bl_ev_beast_tamer", v) end)
-    rareSec:Toggle("bl_ev_beast_esp", "Beast Tamer ESP & Tracer", getUI("bl_ev_beast_esp", false), function(v) UI.SetValue("bl_ev_beast_esp", v) end)
+    rareSec:Toggle("bl_rare_notif", "Proximity Notify Popup", true)
+    rareSec:Toggle("bl_rare_trc", "Directional Tracer Lines", true)
+    rareSec:Toggle("bl_r_life", "Life Up Fruit", true)
+    rareSec:Toggle("bl_r_forg", "Fruit of Forgetfulness", true)
+    rareSec:Toggle("bl_r_chak", "Chakra Fruit", true)
+    rareSec:Toggle("bl_r_scrl", "Scrolls (Mastery/Trait/Summon)", true)
+    rareSec:Toggle("bl_r_rings", "Rare Rings", true)
+    rareSec:Toggle("bl_r_schem", "Schematics", true)
+    rareSec:Toggle("bl_r_eyes", "Rare Eyes (Sharingan, Rinnegan...)", true)
+    rareSec:Toggle("bl_ev_beast_tamer", "Beast Tamer Event Notify", true)
+    rareSec:Toggle("bl_ev_beast_esp", "Beast Tamer ESP & Tracer", false)
 
     local itemSec = tab:Section("Items (Fruits, Bells, Drops)", "Right")
-    itemSec:Toggle("bl_item_en", "Items ESP Enabled", getUI("bl_item_en", true), function(v) UI.SetValue("bl_item_en", v) end)
+    itemSec:Toggle("bl_item_en", "Items ESP Enabled", true)
     itemSec:Keybind("bl_item_kb", 0, "toggle")
-    itemSec:Toggle("bl_item_box", "Show Boxes", getUI("bl_item_box", false), function(v) UI.SetValue("bl_item_box", v) end)
-    itemSec:Toggle("bl_item_name", "Show Names", getUI("bl_item_name", true), function(v) UI.SetValue("bl_item_name", v) end)
-    itemSec:Toggle("bl_item_dist", "Show Distance", getUI("bl_item_dist", true), function(v) UI.SetValue("bl_item_dist", v) end)
-    itemSec:Toggle("f_common_fruit", "Common Fruit", getUI("f_common_fruit", true), function(v) UI.SetValue("f_common_fruit", v) end)
-    itemSec:Toggle("f_bells", "Bells (Sealing / Training)", getUI("f_bells", false), function(v) UI.SetValue("f_bells", v) end)
-    itemSec:Toggle("f_seaweed", "Seaweed", getUI("f_seaweed", false), function(v) UI.SetValue("f_seaweed", v) end)
-    itemSec:Toggle("f_gloweed", "Gloweed", getUI("f_gloweed", false), function(v) UI.SetValue("f_gloweed", v) end)
-    itemSec:Toggle("f_other", "Other Drops", getUI("f_other", true), function(v) UI.SetValue("f_other", v) end)
+    itemSec:Toggle("bl_item_box", "Show Boxes", false)
+    itemSec:Toggle("bl_item_name", "Show Names", true)
+    itemSec:Toggle("bl_item_dist", "Show Distance", true)
+    itemSec:Toggle("f_common_fruit", "Common Fruit", true)
+    itemSec:Toggle("f_bells", "Bells (Sealing / Training)", false)
+    itemSec:Toggle("f_seaweed", "Seaweed", false)
+    itemSec:Toggle("f_gloweed", "Gloweed", false)
+    itemSec:Toggle("f_other", "Other Drops", true)
+end)
+
+UI.AddTab("Combat Assists", function(tab)
+    -- ================= LEFT COLUMN =================
+    local cfgSec = tab:Section("Combat Settings", "Left")
+    cfgSec:SliderInt("bl_combat_dist", "Combat Assists Range", 50, 1200, getUI("bl_combat_dist", 400), function(val)
+        local n = math.floor(tonumber(val) or 400)
+        UI.SetValue("bl_combat_dist", n)
+        S.bl_combat_dist = n
+        settingsVersion = settingsVersion + 1
+    end)
+    cfgSec:Toggle("bl_jutsu_self", "Detect Own Jutsu (Self Test)", false)
+    cfgSec:Toggle("bl_sub_self", "Show Own Sub Status", false)
+    cfgSec:Toggle("bl_iframe_self", "Show Own I-Frames", false)
+    cfgSec:Toggle("bl_mode_self", "Show Own Mode Status", false)
+    cfgSec:Toggle("bl_stun_self", "Show Own Stun Status", false)
+
+    local jutsuSec = tab:Section("Jutsu Overhead Tags", "Left")
+    jutsuSec:Toggle("bl_jutsu_tag", "Show Jutsu Above Head", true)
+    jutsuSec:Toggle("bl_jutsu_box", "Jutsu Background Pill Box", true)
+    jutsuSec:SliderInt("bl_jutsu_size", "Jutsu Text Size", 8, 36, getUI("bl_jutsu_size", 13), function(val)
+        local n = math.floor(tonumber(val) or 13)
+        UI.SetValue("bl_jutsu_size", n)
+        S.bl_jutsu_size = n
+        settingsVersion = settingsVersion + 1
+    end)
+    jutsuSec:Toggle("bl_jutsu_mobs", "Jutsu Above Mobs / Bosses Too", false)
+    jutsuSec:Toggle("bl_jutsu_cd", "Jutsu Cooldown Scan (catches instant casts)", true)
+
+    local inspectSec = tab:Section("Player Profile Inspector", "Left")
+    inspectSec:Toggle("bl_inspect_en", "Leaderboard Click to Inspect", true)
+    inspectSec:Button("Inspect Next Player ->", function()
+        pcall(function() cycleInspectPlayer(1) end)
+    end)
+    inspectSec:Button("Close Profile Card (X)", function()
+        pcall(hideProfileCard)
+    end)
+
+    -- ================= RIGHT COLUMN =================
+    local subSec = tab:Section("Sub Cooldown Tracker", "Right")
+    subSec:Toggle("bl_sub_en", "Opponent Sub Cooldown Tracker", true)
+    subSec:SliderInt("bl_sub_size", "Sub Text Size", 8, 36, getUI("bl_sub_size", 13), function(val)
+        local n = math.floor(tonumber(val) or 13)
+        UI.SetValue("bl_sub_size", n)
+        S.bl_sub_size = n
+        settingsVersion = settingsVersion + 1
+    end)
+    subSec:Toggle("bl_sub_only_cd", "Show Subs Only While On CD", true)
+
+    local iframeSec = tab:Section("I-Frame Indicator", "Right")
+    iframeSec:Toggle("bl_iframe_en", "I-Frame / Invincible Indicator", true)
+    iframeSec:SliderInt("bl_iframe_size", "I-Frame Text Size", 8, 36, getUI("bl_iframe_size", 13), function(val)
+        local n = math.floor(tonumber(val) or 13)
+        UI.SetValue("bl_iframe_size", n)
+        S.bl_iframe_size = n
+        settingsVersion = settingsVersion + 1
+    end)
+
+    local modeSec = tab:Section("Awakening / Mode Tracker", "Right")
+    modeSec:Toggle("bl_mode_en", "Awakening / Mode Tracker", true)
+    modeSec:SliderInt("bl_mode_size", "Mode Text Size", 8, 36, getUI("bl_mode_size", 13), function(val)
+        local n = math.floor(tonumber(val) or 13)
+        UI.SetValue("bl_mode_size", n)
+        S.bl_mode_size = n
+        settingsVersion = settingsVersion + 1
+    end)
+    modeSec:Toggle("bl_mode_name", "Track Awakened Mode Name", true)
+    modeSec:Toggle("bl_mode_dur", "Track Mode Active Duration", true)
+    modeSec:Toggle("bl_mode_cd", "Track Awakening Cooldown", true)
+
+    local stunSec = tab:Section("Combat Stun & State Indicators", "Right")
+    stunSec:Toggle("bl_stun_en", "Combat Stun Indicators", true)
+    stunSec:SliderInt("bl_stun_size", "Stun Text Size", 8, 36, getUI("bl_stun_size", 13), function(val)
+        local n = math.floor(tonumber(val) or 13)
+        UI.SetValue("bl_stun_size", n)
+        S.bl_stun_size = n
+        settingsVersion = settingsVersion + 1
+    end)
+    stunSec:Toggle("bl_stun_block", "Show Blocking & Guard Broken", true)
+    stunSec:Toggle("bl_stun_hyper", "Show HyperArmor", true)
+    stunSec:Toggle("bl_stun_hit", "Show Stunned & Parried", true)
+    stunSec:Toggle("bl_stun_knock", "Show Knockdown & Knockdown Time", true)
 end)
 
 -- ============================================================
@@ -759,6 +828,24 @@ for i = 1, 16 do
 end
 _G.Bloodline_ModeRadar = ModeRadar
 
+-- Combat Stun & State Indicators State
+local StunRadar = {
+    tags = {},
+    cache = {},     -- [playerName] = { block, armBrk, hyper, stun, parry, knock, kTime, grip }
+    cacheAt = {},
+}
+for i = 1, 16 do
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = true
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(255, 225, 45)
+    tag.Visible = false
+    StunRadar.tags[i] = { tag = tag, vis = false, text = "", col = nil, size = 13, x = nil, y = nil }
+end
+_G.Bloodline_StunRadar = StunRadar
+
 -- Shadow visibility flags: we never READ .Visible from a Drawing; we remember what we last
 -- wrote and only write on change.
 local function setVis(s, key, want)
@@ -865,6 +952,11 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_renderConn = nil
     end
 
+    if _G.Bloodline_inputConn then
+        pcall(function() _G.Bloodline_inputConn:Disconnect() end)
+        _G.Bloodline_inputConn = nil
+    end
+
     if _G.Bloodline_csHudTitle then
         pcall(function() _G.Bloodline_csHudTitle:Remove() end)
         _G.Bloodline_csHudTitle = nil
@@ -903,6 +995,13 @@ _G.Bloodline_cleanup = function()
             pcall(function() _G.Bloodline_ModeRadar.tags[i].tag:Remove() end)
         end
         _G.Bloodline_ModeRadar = nil
+    end
+
+    if _G.Bloodline_StunRadar and _G.Bloodline_StunRadar.tags then
+        for i = 1, #_G.Bloodline_StunRadar.tags do
+            pcall(function() _G.Bloodline_StunRadar.tags[i].tag:Remove() end)
+        end
+        _G.Bloodline_StunRadar = nil
     end
 
     if _G.Bloodline_eventBox then
@@ -955,7 +1054,15 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_itemPool = nil
     end
 
+    if _G.Bloodline_ProfileDrawings then
+        for _, d in ipairs(_G.Bloodline_ProfileDrawings) do
+            pcall(function() d:Remove() end)
+        end
+        _G.Bloodline_ProfileDrawings = nil
+    end
+
     pcall(function() UI.RemoveTab("Bloodline") end)
+    pcall(function() UI.RemoveTab("Combat Assists") end)
     pcall(function() UI.RemoveTab("Event Notifier") end)
 end
 
@@ -1299,7 +1406,7 @@ local function refreshPlayers(now)
         if p then
             local pn = tostring(p.Name or "")
             names[pn] = true
-            if p ~= lp or S.bl_jutsu_self or S.bl_sub_self or S.bl_iframe_self or S.bl_mode_self then
+            if p ~= lp or S.bl_jutsu_self or S.bl_sub_self or S.bl_iframe_self or S.bl_mode_self or S.bl_stun_self then
                 local root = rootOf(p.Character)
                 if root then
                     local okR, rp = pcall(getPosOf, root)
@@ -1354,6 +1461,12 @@ local function refreshPlayers(now)
         if not names[n] then
             ModeRadar.cache[n] = nil
             ModeRadar.cacheAt[n] = nil
+        end
+    end
+    for n in pairs(StunRadar.cache) do
+        if not names[n] then
+            StunRadar.cache[n] = nil
+            StunRadar.cacheAt[n] = nil
         end
     end
 end
@@ -1563,7 +1676,7 @@ end
 
 local tickCount = 0
 local function updateActiveCasts()
-    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en
+    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en
     if not combatActive then
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
         return
@@ -1600,7 +1713,7 @@ task.spawn(function()
         if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
 
         local delay = CYCLE_OFF
-        if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en then
+        if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en then
             if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
                 delay = CYCLE_ACTIVE
             else
@@ -2264,7 +2377,7 @@ local function drawMobEntity(e, m)
     local w = clamp(floor(h * 0.55), 8, 300)
     local boxX = floor(sp.X - floor(w * 0.5))
     local boxY = floor(sp.Y - floor(h * 0.5))
-    local maxHp = m.maxHp
+    local maxHp = (m.maxHp and m.maxHp > 0) and m.maxHp or 100
     local hpPct = clamp(hp / maxHp, 0, 1)
     local fillH = clamp(floor(h * hpPct), 0, h)
 
@@ -2332,6 +2445,7 @@ end
 
 -- ---------------- CORRUPTION POINTS ----------------
 local function drawCorruptEntity(e, c)
+    if not c or not c.pos or not isValidVec3(c.pos) then return false end
     local pos = c.pos
     local dist = (rCamPos - pos).Magnitude
     if dist <= 0.5 then return false end
@@ -2416,6 +2530,7 @@ end
 
 -- ---------------- EVENT RIFTS ----------------
 local function drawRiftEntity(e, r)
+    if not r or not r.pos or not isValidVec3(r.pos) then return false end
     local pos = r.pos
     local dist = (rCamPos - pos).Magnitude
     if dist <= 0.5 then return false end
@@ -2493,6 +2608,7 @@ end
 
 -- ---------------- TOWN & FRIENDLY NPCS ----------------
 local function drawNPCEntity(e, n)
+    if not n or not n.root then return false end
     local okP, rPos = pcall(getPosOf, n.root)
     if not okP or not isValidVec3(rPos) then return false end
 
@@ -2556,6 +2672,7 @@ end
 
 -- ---------------- ITEMS ----------------
 local function drawItemEntity(e, it)
+    if not it or not it.pos or not isValidVec3(it.pos) then return false end
     local pos = it.pos
     local dist = (rCamPos - pos).Magnitude
     if dist <= 0.5 then return false end
@@ -3163,6 +3280,732 @@ local function renderModeTags()
     hideModeTags(count + 1)
 end
 
+-- ---------------- COMBAT STUN & STATE INDICATORS ----------------
+local function hideStunTags(from)
+    local tags = StunRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
+            t.text = ""
+        end
+    end
+end
+
+local function renderStunTags()
+    local tags = StunRadar.tags
+    local count = 0
+    if S.bl_stun_en and JutsuRadar.order then
+        local order = JutsuRadar.order
+        local roots = JutsuRadar.roots
+        local near = JutsuRadar.near
+        local maxTags = #tags
+        local stunSize = S.bl_stun_size or 13
+        local lp = Players.LocalPlayer
+        local myName = lp and lp.Name
+
+        local maxDist = S.bl_combat_dist or 400
+        for i = 1, #order do
+            if count >= maxTags then break end
+            local pn = order[i]
+            local d = near[pn]
+            if not d or d > maxDist then break end
+            local isSelf = (myName and pn == myName) or (lp and pn == lp.Name)
+            if isSelf and not S.bl_stun_self then
+                -- skip self
+            else
+                local root = roots[pn]
+                if root then
+                    local entry = StunRadar.cache[pn]
+                    if not entry or (rNow - (StunRadar.cacheAt[pn] or 0)) > 15 then
+                        local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+                        local f = rsSettings and rsSettings:FindFirstChild(pn)
+                        entry = {
+                            block   = f and f:FindFirstChild("Blocking"),
+                            armBrk  = f and (f:FindFirstChild("ArmorBroken") or f:FindFirstChild("ArmourBroken")),
+                            hyper   = f and (f:FindFirstChild("HyperArmour") or f:FindFirstChild("HyperArmor")),
+                            stun    = f and f:FindFirstChild("Stunned"),
+                            parry   = f and (f:FindFirstChild("ParryStun") or f:FindFirstChild("Parried")),
+                            knock   = f and f:FindFirstChild("Knocked"),
+                            kTime   = f and f:FindFirstChild("KnockedTime"),
+                            grip    = f and (f:FindFirstChild("BeingGripped") or f:FindFirstChild("Gripped")),
+                        }
+                        StunRadar.cache[pn] = entry
+                        StunRadar.cacheAt[pn] = rNow
+                    end
+
+                    local isBlocking, isArmorBroken, isHyper, isStunned, isParried, isKnocked, isGripped = false, false, false, false, false, false, false
+                    local kTimeVal = 0
+
+                    if entry.block then
+                        local ok, v = pcall(getValue, entry.block)
+                        if ok and v == true then isBlocking = true end
+                    end
+                    if entry.armBrk then
+                        local ok, v = pcall(getValue, entry.armBrk)
+                        if ok and v == true then isArmorBroken = true end
+                    end
+                    if entry.hyper then
+                        local ok, v = pcall(getValue, entry.hyper)
+                        if ok and v == true then isHyper = true end
+                    end
+                    if entry.stun then
+                        local ok, v = pcall(getValue, entry.stun)
+                        if ok and v == true then isStunned = true end
+                    end
+                    if entry.parry then
+                        local ok, v = pcall(getValue, entry.parry)
+                        if ok and v == true then isParried = true end
+                    end
+                    if entry.knock then
+                        local ok, v = pcall(getValue, entry.knock)
+                        if ok and v == true then isKnocked = true end
+                    end
+                    if entry.kTime then
+                        local ok, v = pcall(getValue, entry.kTime)
+                        if ok and type(v) == "number" then kTimeVal = v end
+                    end
+                    if entry.grip then
+                        local ok, v = pcall(getValue, entry.grip)
+                        if ok and v == true then isGripped = true end
+                    end
+
+                    local parts = {}
+                    local tagCol = nil
+
+                    if S.bl_stun_knock and (isKnocked or kTimeVal > 0 or isGripped) then
+                        if isGripped then
+                            parts[#parts + 1] = "[BEING GRIPPED]"
+                            tagCol = Color3.fromRGB(255, 45, 45)
+                        elseif kTimeVal > 0 then
+                            local rem = (kTimeVal > 1e8) and math.max(0, kTimeVal - os.time()) or kTimeVal
+                            if rem > 0 then
+                                parts[#parts + 1] = string.format("[KNOCKED: %.1fs]", rem)
+                            else
+                                parts[#parts + 1] = "[KNOCKED]"
+                            end
+                            tagCol = Color3.fromRGB(255, 60, 60)
+                        else
+                            parts[#parts + 1] = "[KNOCKED]"
+                            tagCol = Color3.fromRGB(255, 60, 60)
+                        end
+                    else
+                        if S.bl_stun_block and isArmorBroken then
+                            parts[#parts + 1] = "[GUARD BROKEN]"
+                            tagCol = Color3.fromRGB(255, 75, 110)
+                        end
+                        if S.bl_stun_hit then
+                            if isParried then
+                                parts[#parts + 1] = "[PARRIED]"
+                                tagCol = tagCol or Color3.fromRGB(255, 230, 50)
+                            elseif isStunned then
+                                parts[#parts + 1] = "[STUNNED]"
+                                tagCol = tagCol or Color3.fromRGB(255, 225, 45)
+                            end
+                        end
+                        if S.bl_stun_hyper and isHyper then
+                            parts[#parts + 1] = "[HYPERARMOR]"
+                            tagCol = tagCol or Color3.fromRGB(255, 155, 0)
+                        end
+                        if S.bl_stun_block and isBlocking then
+                            parts[#parts + 1] = "[BLOCKING]"
+                            if isHyper then
+                                tagCol = Color3.fromRGB(255, 175, 50)
+                            else
+                                tagCol = tagCol or Color3.fromRGB(60, 210, 255)
+                            end
+                        end
+                    end
+
+                    if #parts > 0 and tagCol then
+                        local label = table.concat(parts, " ")
+                        local okP, rPos = pcall(getPosOf, root)
+                        if okP and isValidVec3(rPos) then
+                            local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                            if okS and onScreen and isValidVec2(sp) then
+                                local dist = (rCamPos - rPos).Magnitude
+                                local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                                if isValidNum(rawH) then
+                                    local h = clamp(floor(rawH), 16, 450)
+                                    count = count + 1
+                                    local t = tags[count]
+
+                                    if t.text ~= label then
+                                        t.tag.Text = label
+                                        t.text = label
+                                    end
+                                    if t.col ~= tagCol then
+                                        t.tag.Color = tagCol
+                                        t.col = tagCol
+                                    end
+                                    if t.size ~= stunSize then
+                                        t.tag.Size = stunSize
+                                        t.size = stunSize
+                                    end
+
+                                    local curOff = tagOffsets[pn] or 20
+                                    local stunStep = math.floor(stunSize + 6)
+                                    tagOffsets[pn] = curOff + stunStep
+                                    local x, y = floor(sp.X), floor(sp.Y - floor(h * 0.5) - curOff)
+                                    if t.x ~= x or t.y ~= y then
+                                        t.x = x; t.y = y
+                                        t.tag.Position = Vector2.new(x, y)
+                                    end
+                                    if not t.vis then
+                                        t.tag.Visible = true
+                                        t.vis = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    hideStunTags(count + 1)
+end
+
+-- ============================================================
+--  PLAYER INSPECTOR SYSTEM
+-- ============================================================
+-- ============================================================
+--  PLAYER INSPECTOR SYSTEM
+-- ============================================================
+local CARD_W = 400
+local CARD_H = 270
+
+local cardBg = Drawing.new("Square")
+cardBg.Filled = true
+cardBg.Color = Color3.fromRGB(12, 15, 22)
+cardBg.Transparency = 0.94
+cardBg.Thickness = 1
+cardBg.Visible = false
+
+local cardBorder = Drawing.new("Square")
+cardBorder.Filled = false
+cardBorder.Color = Color3.fromRGB(40, 110, 195)
+cardBorder.Thickness = 1.5
+cardBorder.Visible = false
+
+local cardHeader = Drawing.new("Square")
+cardHeader.Filled = true
+cardHeader.Color = Color3.fromRGB(18, 24, 38)
+cardHeader.Transparency = 0.96
+cardHeader.Thickness = 1
+cardHeader.Visible = false
+
+local cardHeaderLine = Drawing.new("Square")
+cardHeaderLine.Filled = true
+cardHeaderLine.Color = Color3.fromRGB(35, 130, 220)
+cardHeaderLine.Thickness = 1
+cardHeaderLine.Visible = false
+
+local cardTitle = Drawing.new("Text")
+cardTitle.Size = 13
+cardTitle.Font = Drawing.Fonts.SystemBold
+cardTitle.Color = Color3.fromRGB(255, 215, 75)
+cardTitle.Outline = true
+cardTitle.Visible = false
+
+local cardClose = Drawing.new("Text")
+cardClose.Size = 12
+cardClose.Font = Drawing.Fonts.SystemBold
+cardClose.Color = Color3.fromRGB(255, 85, 85)
+cardClose.Outline = true
+cardClose.Visible = false
+
+local cardHpBg = Drawing.new("Square")
+cardHpBg.Filled = true
+cardHpBg.Color = Color3.fromRGB(30, 34, 46)
+cardHpBg.Thickness = 1
+cardHpBg.Visible = false
+
+local cardHpFill = Drawing.new("Square")
+cardHpFill.Filled = true
+cardHpFill.Color = Color3.fromRGB(45, 210, 80)
+cardHpFill.Thickness = 1
+cardHpFill.Visible = false
+
+local CARD_LINES_COUNT = 14
+local cardLines = {}
+for i = 1, CARD_LINES_COUNT do
+    local txt = Drawing.new("Text")
+    txt.Size = 12
+    txt.Font = Drawing.Fonts.System
+    txt.Color = Color3.fromRGB(230, 230, 235)
+    txt.Outline = true
+    txt.Visible = false
+    cardLines[i] = txt
+end
+
+_G.Bloodline_ProfileDrawings = {
+    cardBg, cardBorder, cardHeader, cardHeaderLine, cardTitle, cardClose, cardHpBg, cardHpFill
+}
+for i = 1, CARD_LINES_COUNT do
+    table.insert(_G.Bloodline_ProfileDrawings, cardLines[i])
+end
+
+local cardVisible = false
+local inspectedPlayer = nil
+local inspectedCharName = nil
+local lastClickM1 = false
+local lastKeyX = false
+local cardScreenPos = Vector2.new(50, 120)
+
+local function hideProfileCard()
+    cardVisible = false
+    inspectedPlayer = nil
+    inspectedCharName = nil
+    cardBg.Visible = false
+    cardBorder.Visible = false
+    cardHeader.Visible = false
+    cardHeaderLine.Visible = false
+    cardTitle.Visible = false
+    cardClose.Visible = false
+    cardHpBg.Visible = false
+    cardHpFill.Visible = false
+    for i = 1, CARD_LINES_COUNT do
+        cardLines[i].Visible = false
+    end
+end
+
+local function getLeaderboardLeftEdge()
+    local lp = Players.LocalPlayer
+    local pListGui = lp and lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("ClientGui")
+    local mf = pListGui and pListGui:FindFirstChild("Mainframe")
+    local plFrame = mf and mf:FindFirstChild("PlayerList")
+    local list = plFrame and plFrame:FindFirstChild("List")
+    if list then
+        for _, c in ipairs(list:GetChildren()) do
+            if c.Name:find("PlayerTemplate") then
+                local pos = c.AbsolutePosition
+                if pos and pos.X and pos.X > 200 then
+                    return pos.X
+                end
+            end
+        end
+        if plFrame.AbsolutePosition and plFrame.AbsolutePosition.X > 200 then
+            return plFrame.AbsolutePosition.X
+        end
+    end
+    local cam = Workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+    return vp.X - 260
+end
+
+local function splitItemsIntoLines(items, maxPerLine, maxChars)
+    local lines = {}
+    local cur = {}
+    local curLen = 0
+    for _, it in ipairs(items) do
+        local itLen = #it + 4
+        if #cur >= maxPerLine or (curLen + itLen > maxChars and #cur > 0) then
+            table.insert(lines, table.concat(cur, "  "))
+            cur = {}
+            curLen = 0
+        end
+        table.insert(cur, "• " .. it)
+        curLen = curLen + itLen
+    end
+    if #cur > 0 then
+        table.insert(lines, table.concat(cur, "  "))
+    end
+    return lines
+end
+
+local function fetchPlayerDetails(p)
+    local pName = p.Name
+    local rs = game:GetService("ReplicatedStorage")
+    local s = rs:FindFirstChild("Settings") and rs.Settings:FindFirstChild(pName)
+    local cd = rs:FindFirstChild("Cooldowns") and rs.Cooldowns:FindFirstChild(pName)
+
+    -- Clan / Bloodline
+    local clan = "Unknown"
+    local blVal = s and s:FindFirstChild("Bloodline")
+    if blVal and blVal.Value and blVal.Value ~= "" then
+        clan = blVal.Value
+    elseif p.Character then
+        local knownClans = {"Ayrui", "Gaara", "Uchiha", "Hoshigaki", "Uzumaki", "Senju", "Zetsu", "Hyuga", "Nara", "Inuzuka"}
+        local attrs = p.Character:GetAttributes()
+        for _, cl in ipairs(knownClans) do
+            if attrs[cl] ~= nil then clan = cl; break end
+        end
+    end
+
+    -- HP & Max HP
+    local curHp, maxHp = 0, 100
+    local hum = p.Character and p.Character:FindFirstChild("Humanoid")
+    if hum then
+        local okH, h = pcall(function() return hum.Health end)
+        local okM, m = pcall(function() return hum.MaxHealth end)
+        if okH and type(h) == "number" then curHp = math.floor(h) end
+        if okM and type(m) == "number" then maxHp = math.floor(m) end
+    end
+
+    -- Weapon
+    local weapon = "Fist"
+    local wpVal = s and s:FindFirstChild("CurrentWeapon")
+    if wpVal and wpVal.Value and wpVal.Value ~= "" then
+        weapon = wpVal.Value
+    end
+
+    -- Armor / Clothing
+    local armor = "None"
+    local clVal = s and s:FindFirstChild("Clothing")
+    if clVal and clVal.Value and clVal.Value ~= "" then
+        armor = clVal.Value
+    end
+
+    -- Mode / Awakening
+    local mode = "None"
+    local awkVal = s and s:FindFirstChild("Awakened")
+    if awkVal and awkVal.Value and awkVal.Value ~= "" then
+        mode = awkVal.Value
+    end
+
+    -- Rings
+    local rings = {}
+    local r1 = s and s:FindFirstChild("Ring1")
+    local r2 = s and s:FindFirstChild("Ring2")
+    if r1 and r1.Value and r1.Value ~= "" then table.insert(rings, r1.Value) end
+    if r2 and r2.Value and r2.Value ~= "" then table.insert(rings, r2.Value) end
+    local ringsStr = #rings > 0 and table.concat(rings, ", ") or "None"
+
+    -- Traits & Eyes
+    local traits = {}
+    if p.Character and p.Character:FindFirstChild("Traits") then
+        for _, t in ipairs(p.Character.Traits:GetChildren()) do
+            table.insert(traits, t.Name)
+        end
+    end
+    local traitsStr = #traits > 0 and table.concat(traits, ", ") or "None"
+
+    -- Skills
+    local skills = {}
+    if cd then
+        for _, sk in ipairs(cd:GetChildren()) do
+            table.insert(skills, sk.Name)
+        end
+    end
+    table.sort(skills)
+
+    return {
+        name = pName,
+        clan = clan,
+        curHp = curHp,
+        maxHp = maxHp,
+        weapon = weapon,
+        armor = armor,
+        mode = mode,
+        rings = ringsStr,
+        traits = traitsStr,
+        traitsList = traits,
+        skills = skills,
+    }
+end
+
+local function showProfileCard(player, charName)
+    if not player then return end
+    inspectedPlayer = player
+    inspectedCharName = charName or player.Name
+    cardVisible = true
+
+    -- Position card to the LEFT of the leaderboard with a clean 16px gap (NO OVERLAP)
+    local lbX = getLeaderboardLeftEdge()
+    local posX = math.floor(lbX - CARD_W - 16)
+    if posX < 10 then posX = 10 end
+    local posY = 45
+    cardScreenPos = Vector2.new(posX, posY)
+
+    local d = fetchPlayerDetails(player)
+
+    cardBg.Position = cardScreenPos
+    cardBg.Size = Vector2.new(CARD_W, CARD_H)
+    cardBg.Visible = true
+
+    cardBorder.Position = cardScreenPos
+    cardBorder.Size = Vector2.new(CARD_W, CARD_H)
+    cardBorder.Visible = true
+
+    cardHeader.Position = cardScreenPos
+    cardHeader.Size = Vector2.new(CARD_W, 26)
+    cardHeader.Visible = true
+
+    cardHeaderLine.Position = Vector2.new(posX, posY + 26)
+    cardHeaderLine.Size = Vector2.new(CARD_W, 1.5)
+    cardHeaderLine.Visible = true
+
+    local headerTitle = "[PROFILE] " .. d.name
+    if inspectedCharName and inspectedCharName ~= d.name and inspectedCharName ~= "" then
+        headerTitle = headerTitle .. " (" .. inspectedCharName .. ")"
+    end
+    cardTitle.Position = Vector2.new(posX + 10, posY + 6)
+    cardTitle.Text = headerTitle
+    cardTitle.Visible = true
+
+    cardClose.Position = Vector2.new(posX + CARD_W - 75, posY + 7)
+    cardClose.Text = "[X] Close"
+    cardClose.Visible = true
+
+    -- Row 1: Clan / Bloodline (Left) & HP Text (Right)
+    local lineY = posY + 34
+    cardLines[1].Position = Vector2.new(posX + 10, lineY)
+    cardLines[1].Text = "Clan / Bloodline: " .. d.clan
+    cardLines[1].Color = Color3.fromRGB(55, 215, 255)
+    cardLines[1].Visible = true
+
+    local hpPct = d.maxHp > 0 and math.clamp(d.curHp / d.maxHp, 0, 1) or 0
+    cardLines[2].Position = Vector2.new(posX + CARD_W - 148, lineY)
+    cardLines[2].Text = string.format("Health: %d/%d (%d%%)", d.curHp, d.maxHp, math.floor(hpPct * 100))
+    cardLines[2].Color = hpPct > 0.5 and Color3.fromRGB(65, 235, 125) or (hpPct > 0.25 and Color3.fromRGB(245, 205, 50) or Color3.fromRGB(255, 75, 75))
+    cardLines[2].Visible = true
+
+    -- Health Bar
+    lineY = lineY + 18
+    local barW = CARD_W - 20
+    cardHpBg.Position = Vector2.new(posX + 10, lineY)
+    cardHpBg.Size = Vector2.new(barW, 6)
+    cardHpBg.Visible = true
+
+    cardHpFill.Position = Vector2.new(posX + 10, lineY)
+    cardHpFill.Size = Vector2.new(math.max(1, math.floor(barW * hpPct)), 6)
+    cardHpFill.Color = hpPct > 0.5 and Color3.fromRGB(45, 210, 80) or (hpPct > 0.25 and Color3.fromRGB(240, 200, 40) or Color3.fromRGB(240, 60, 60))
+    cardHpFill.Visible = true
+
+    -- Row 2: Equipment (Weapon & Armor)
+    lineY = lineY + 13
+    cardLines[3].Position = Vector2.new(posX + 10, lineY)
+    cardLines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. d.armor
+    cardLines[3].Color = Color3.fromRGB(225, 230, 240)
+    cardLines[3].Visible = true
+
+    -- Row 3: Mode & Rings
+    lineY = lineY + 16
+    cardLines[4].Position = Vector2.new(posX + 10, lineY)
+    cardLines[4].Text = "Awakening: " .. d.mode .. "   |   Rings: " .. d.rings
+    cardLines[4].Color = Color3.fromRGB(205, 210, 225)
+    cardLines[4].Visible = true
+
+    -- Row 4: Traits Header
+    lineY = lineY + 18
+    local tList = d.traitsList or {}
+    cardLines[5].Position = Vector2.new(posX + 10, lineY)
+    cardLines[5].Text = "▶ Traits & Innate Eyes (" .. #tList .. "):"
+    cardLines[5].Color = Color3.fromRGB(205, 125, 255)
+    cardLines[5].Visible = true
+
+    -- Traits Content
+    lineY = lineY + 15
+    local tLines = splitItemsIntoLines(tList, 2, 54)
+    if #tLines == 0 then tLines = {"• None"} end
+    cardLines[6].Position = Vector2.new(posX + 15, lineY)
+    cardLines[6].Text = tLines[1] or ""
+    cardLines[6].Color = Color3.fromRGB(225, 195, 255)
+    cardLines[6].Visible = (tLines[1] ~= nil)
+
+    lineY = lineY + 15
+    cardLines[7].Position = Vector2.new(posX + 15, lineY)
+    cardLines[7].Text = tLines[2] or ""
+    cardLines[7].Color = Color3.fromRGB(225, 195, 255)
+    cardLines[7].Visible = (tLines[2] ~= nil and tLines[2] ~= "")
+
+    if not (tLines[2] and tLines[2] ~= "") then
+        lineY = lineY - 15
+    end
+
+    -- Skills Header
+    lineY = lineY + 18
+    local sList = d.skills or {}
+    cardLines[8].Position = Vector2.new(posX + 10, lineY)
+    cardLines[8].Text = "▶ Equipped Jutsu / Skills (" .. #sList .. "):"
+    cardLines[8].Color = Color3.fromRGB(255, 215, 60)
+    cardLines[8].Visible = true
+
+    -- Skills Content (up to 4 lines)
+    local sLines = splitItemsIntoLines(sList, 4, 58)
+    if #sLines == 0 then sLines = {"• None"} end
+
+    for i = 1, 4 do
+        local lIdx = 8 + i
+        lineY = lineY + 15
+        local txt = sLines[i]
+        cardLines[lIdx].Position = Vector2.new(posX + 15, lineY)
+        cardLines[lIdx].Text = txt or ""
+        cardLines[lIdx].Color = Color3.fromRGB(215, 230, 245)
+        cardLines[lIdx].Visible = (txt ~= nil and txt ~= "")
+    end
+
+    -- Footer hint
+    lineY = lineY + 18
+    cardLines[13].Position = Vector2.new(posX + 10, lineY)
+    cardLines[13].Text = "Tip: Click player on leaderboard again to close"
+    cardLines[13].Color = Color3.fromRGB(115, 125, 145)
+    cardLines[13].Visible = true
+
+    cardLines[14].Visible = false
+end
+
+local lastHandledM1 = 0
+local lastHandledX = 0
+
+local function getClickedLeaderboardPlayer(mx, my)
+    local lp = Players.LocalPlayer
+    local pListGui = lp and lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("ClientGui")
+    local mf = pListGui and pListGui:FindFirstChild("Mainframe")
+    local plFrame = mf and mf:FindFirstChild("PlayerList")
+    if not plFrame then return nil end
+    local list = plFrame:FindFirstChild("List")
+    if not list then return nil end
+
+    local templates = {}
+    for _, c in ipairs(list:GetChildren()) do
+        if c.Name:find("PlayerTemplate") then
+            local pos = c.AbsolutePosition
+            if pos and isValidVec2(pos) then
+                table.insert(templates, { btn = c, y = pos.Y, x = pos.X })
+            end
+        end
+    end
+    if #templates == 0 then return nil end
+    table.sort(templates, function(a, b) return a.y < b.y end)
+
+    local allPlayers = Players:GetPlayers()
+    for idx, t in ipairs(templates) do
+        -- Bounding box check on leaderboard row
+        if mx >= (t.x - 25) and mx <= (t.x + 320) and my >= (t.y - 4) and my <= (t.y + 30) then
+            local pNameObj = t.btn:FindFirstChild("PlayerName")
+            local charName = pNameObj and pNameObj.Text
+            local matched = nil
+            if charName and charName ~= "" and charName ~= "failed to fetch text" then
+                local cn = charName:lower()
+                for _, p in ipairs(allPlayers) do
+                    local pn = p.Name:lower()
+                    if pn == cn or pn:find(cn, 1, true) or cn:find(pn, 1, true) then
+                        matched = p
+                        break
+                    end
+                end
+            end
+            if not matched then
+                matched = allPlayers[idx]
+            end
+            if matched then
+                return matched, charName
+            end
+        end
+    end
+    return nil
+end
+
+local function handleLeftClick(mx, my)
+    -- 1. Check if clicking on Card Close [X] button
+    if cardVisible then
+        if mx >= (cardScreenPos.X + CARD_W - 85) and mx <= (cardScreenPos.X + CARD_W + 10)
+           and my >= cardScreenPos.Y and my <= (cardScreenPos.Y + 30) then
+            hideProfileCard()
+            return true
+        end
+    end
+
+    -- 2. Check if clicking on Leaderboard Player
+    if S.bl_inspect_en ~= false then
+        local p, cName = getClickedLeaderboardPlayer(mx, my)
+        if p then
+            if cardVisible and inspectedPlayer == p then
+                -- Clicked on the same player again: toggle closed!
+                hideProfileCard()
+                return true
+            else
+                showProfileCard(p, cName)
+                return true
+            end
+        end
+    end
+
+    -- 3. If card is visible and clicking outside of card, close card
+    if cardVisible then
+        if mx < (cardScreenPos.X - 10) or mx > (cardScreenPos.X + CARD_W + 10)
+           or my < (cardScreenPos.Y - 10) or my > (cardScreenPos.Y + CARD_H + 10) then
+            hideProfileCard()
+            return true
+        end
+    end
+    return false
+end
+
+local function handleXKey()
+    if cardVisible then hideProfileCard() end
+end
+
+-- Native event connection via UserInputService for reliable click capture
+if _G.Bloodline_inputConn then
+    pcall(function() _G.Bloodline_inputConn:Disconnect() end)
+    _G.Bloodline_inputConn = nil
+end
+_G.Bloodline_inputConn = UserInputService.InputBegan:Connect(function(input)
+    local now = os.clock()
+    local itype = input.UserInputType
+    if itype == Enum.UserInputType.MouseButton1 then
+        if (now - lastHandledM1) >= 0.12 then
+            lastHandledM1 = now
+            local mouse = Players.LocalPlayer:GetMouse()
+            local mx = (input.Position and input.Position.X) or (mouse and mouse.X) or 0
+            local my = (input.Position and input.Position.Y) or (mouse and mouse.Y) or 0
+            handleLeftClick(mx, my)
+        end
+    elseif itype == Enum.UserInputType.Keyboard then
+        if input.KeyCode == Enum.KeyCode.X then
+            if (now - lastHandledX) >= 0.2 then
+                lastHandledX = now
+                handleXKey()
+            end
+        end
+    end
+end)
+
+local function cycleInspectPlayer(delta)
+    local all = Players:GetPlayers()
+    if #all == 0 then return end
+    local curIdx = 1
+    if inspectedPlayer then
+        for i, p in ipairs(all) do
+            if p == inspectedPlayer then curIdx = i; break end
+        end
+    end
+    local nextIdx = ((curIdx - 1 + delta) % #all) + 1
+    showProfileCard(all[nextIdx])
+end
+
+local function updateInput()
+    local now = os.clock()
+
+    -- Polling fallback for Keybind X
+    local xPressed = iskeypressed and (iskeypressed(0x58) or iskeypressed(88)) or false
+    if xPressed and not lastKeyX then
+        if (now - lastHandledX) >= 0.2 then
+            lastHandledX = now
+            handleXKey()
+        end
+    end
+    lastKeyX = xPressed
+
+    -- Polling fallback for Mouse Left Click
+    local m1 = ismouse1pressed and ismouse1pressed() or false
+    local mouse = Players.LocalPlayer:GetMouse()
+    local mx = mouse and mouse.X or 0
+    local my = mouse and mouse.Y or 0
+
+    if m1 and not lastClickM1 then
+        if (now - lastHandledM1) >= 0.12 then
+            lastHandledM1 = now
+            handleLeftClick(mx, my)
+        end
+    end
+    lastClickM1 = m1
+end
+
 -- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
 local function hideAllDrawings()
     for i = 1, MOB_POOL_SIZE do local s = mobPool[i]; s.isShown = true; hideMobSlot(s) end
@@ -3177,6 +4020,8 @@ local function hideAllDrawings()
     hideSubTags(1)
     hideIFrameTags(1)
     hideModeTags(1)
+    hideStunTags(1)
+    hideProfileCard()
 end
 
 local function renderFrame()
@@ -3227,23 +4072,20 @@ local function renderFrame()
         scanEpoch = scanEpoch,
     }
 
-    renderMobs()
-    renderCorrupt()
-    renderRifts()
-    renderNPCs()
-    renderItems()
-    renderChakraHud()
-    renderBeastTamer()
+    pcall(renderMobs)
+    pcall(renderCorrupt)
+    pcall(renderRifts)
+    pcall(renderNPCs)
+    pcall(renderItems)
+    pcall(renderChakraHud)
+    pcall(renderBeastTamer)
     tagOffsets = {}
-    -- Isolated: an error in any combat assist tag can never blank the ESP
-    local okJ, errJ = pcall(renderJutsuTags)
-    if not okJ then logDebug("Jutsu tag render error: " .. tostring(errJ)) end
-    local okSub, errSub = pcall(renderSubTags)
-    if not okSub then logDebug("Sub tag render error: " .. tostring(errSub)) end
-    local okInv, errInv = pcall(renderIFrameTags)
-    if not okInv then logDebug("IFrame tag render error: " .. tostring(errInv)) end
-    local okMode, errMode = pcall(renderModeTags)
-    if not okMode then logDebug("Mode tag render error: " .. tostring(errMode)) end
+    pcall(renderJutsuTags)
+    pcall(renderSubTags)
+    pcall(renderIFrameTags)
+    pcall(renderModeTags)
+    pcall(renderStunTags)
+    pcall(updateInput)
 end
 
 _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
@@ -3266,7 +4108,6 @@ _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
     if not ok then
         _G.Bloodline_lastError = tostring(err)
         logDebug("RenderStepped error: " .. tostring(err))
-        pcall(hideAllDrawings)
     end
 end)
 
