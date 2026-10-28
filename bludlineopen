@@ -605,10 +605,10 @@ UI.AddTab("Combat Assists", function(tab)
         S.bl_stun_size = n
         settingsVersion = settingsVersion + 1
     end)
-    stunSec:Toggle("bl_stun_block", "Show Blocking & Guard Broken", true)
+    stunSec:Toggle("bl_stun_block", "Show Blocking", true)
     stunSec:Toggle("bl_stun_hyper", "Show HyperArmor", true)
     stunSec:Toggle("bl_stun_hit", "Show Stunned & Parried", true)
-    stunSec:Toggle("bl_stun_knock", "Show Knockdown & Knockdown Time", true)
+    stunSec:Toggle("bl_stun_knock", "Show Knockdown", true)
 end)
 
 -- ============================================================
@@ -831,7 +831,7 @@ _G.Bloodline_ModeRadar = ModeRadar
 -- Combat Stun & State Indicators State
 local StunRadar = {
     tags = {},
-    cache = {},     -- [playerName] = { block, armBrk, hyper, stun, parry, knock, kTime, grip }
+    cache = {},     -- [playerName] = { block, hyper, stun, parry, knock, grip }
     cacheAt = {},
 }
 for i = 1, 16 do
@@ -3323,28 +3323,21 @@ local function renderStunTags()
                         local f = rsSettings and rsSettings:FindFirstChild(pn)
                         entry = {
                             block   = f and f:FindFirstChild("Blocking"),
-                            armBrk  = f and (f:FindFirstChild("ArmorBroken") or f:FindFirstChild("ArmourBroken")),
                             hyper   = f and (f:FindFirstChild("HyperArmour") or f:FindFirstChild("HyperArmor")),
                             stun    = f and f:FindFirstChild("Stunned"),
                             parry   = f and (f:FindFirstChild("ParryStun") or f:FindFirstChild("Parried")),
                             knock   = f and f:FindFirstChild("Knocked"),
-                            kTime   = f and f:FindFirstChild("KnockedTime"),
                             grip    = f and (f:FindFirstChild("BeingGripped") or f:FindFirstChild("Gripped")),
                         }
                         StunRadar.cache[pn] = entry
                         StunRadar.cacheAt[pn] = rNow
                     end
 
-                    local isBlocking, isArmorBroken, isHyper, isStunned, isParried, isKnocked, isGripped = false, false, false, false, false, false, false
-                    local kTimeVal = 0
+                    local isBlocking, isHyper, isStunned, isParried, isKnocked, isGripped = false, false, false, false, false, false
 
                     if entry.block then
                         local ok, v = pcall(getValue, entry.block)
                         if ok and v == true then isBlocking = true end
-                    end
-                    if entry.armBrk then
-                        local ok, v = pcall(getValue, entry.armBrk)
-                        if ok and v == true then isArmorBroken = true end
                     end
                     if entry.hyper then
                         local ok, v = pcall(getValue, entry.hyper)
@@ -3362,10 +3355,6 @@ local function renderStunTags()
                         local ok, v = pcall(getValue, entry.knock)
                         if ok and v == true then isKnocked = true end
                     end
-                    if entry.kTime then
-                        local ok, v = pcall(getValue, entry.kTime)
-                        if ok and type(v) == "number" then kTimeVal = v end
-                    end
                     if entry.grip then
                         local ok, v = pcall(getValue, entry.grip)
                         if ok and v == true then isGripped = true end
@@ -3374,27 +3363,15 @@ local function renderStunTags()
                     local parts = {}
                     local tagCol = nil
 
-                    if S.bl_stun_knock and (isKnocked or kTimeVal > 0 or isGripped) then
+                    if S.bl_stun_knock and (isKnocked or isGripped) then
                         if isGripped then
                             parts[#parts + 1] = "[BEING GRIPPED]"
                             tagCol = Color3.fromRGB(255, 45, 45)
-                        elseif kTimeVal > 0 then
-                            local rem = (kTimeVal > 1e8) and math.max(0, kTimeVal - os.time()) or kTimeVal
-                            if rem > 0 then
-                                parts[#parts + 1] = string.format("[KNOCKED: %.1fs]", rem)
-                            else
-                                parts[#parts + 1] = "[KNOCKED]"
-                            end
-                            tagCol = Color3.fromRGB(255, 60, 60)
                         else
                             parts[#parts + 1] = "[KNOCKED]"
                             tagCol = Color3.fromRGB(255, 60, 60)
                         end
                     else
-                        if S.bl_stun_block and isArmorBroken then
-                            parts[#parts + 1] = "[GUARD BROKEN]"
-                            tagCol = Color3.fromRGB(255, 75, 110)
-                        end
                         if S.bl_stun_hit then
                             if isParried then
                                 parts[#parts + 1] = "[PARRIED]"
