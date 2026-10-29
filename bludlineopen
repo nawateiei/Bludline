@@ -74,6 +74,19 @@ local COL_PURPLE  = Color3.fromRGB(175, 45, 255)
 local COL_PURP_TXT= Color3.fromRGB(220, 140, 255)
 local COL_BAR_BG  = Color3.fromRGB(20, 20, 20)
 
+local BX = {
+    backoff = 0, beatDet = os.clock(), beatCol = os.clock(), beatRender = os.clock(),
+    reads = 0, dbgAt = 0, pruneAt = 0, jobBadSince = nil, lastClickAt = 0,
+    debrisAt = -100, debrisRifts = {},
+    vals = {}, posCache = {}, colors = {}, jutsuMemo = {},
+}
+function BX.RGB(r, g, b)
+    local k = r * 65536 + g * 256 + b
+    local c = BX.colors[k]
+    if not c then c = Color3.fromRGB(r, g, b); BX.colors[k] = c end
+    return c
+end
+
 -- Rare Items Database
 local RARE_ITEMS = {
     ["Life Up Fruit"] = {
@@ -1012,7 +1025,11 @@ local function alive()
     -- If server changed (server hop / teleport), terminate loops immediately
     local currentJob = tostring(game.JobId or "")
     if INITIAL_JOB_ID ~= "" and currentJob ~= "" and currentJob ~= INITIAL_JOB_ID then
-        return false
+        local t = os.clock()
+        if not BX.jobBadSince then BX.jobBadSince = t
+        elseif (t - BX.jobBadSince) > 3 then return false end
+    else
+        BX.jobBadSince = nil
     end
     return true
 end
@@ -1341,6 +1358,12 @@ local EXACT_SPELL_MAP = {
 }
 
 local function getJutsuColor(skillName)
+    if not skillName then return JUTSU_COLORS.DEFAULT end
+    local c = BX.jutsuMemo[skillName]
+    if not c then c = BX.jutsuColorRaw(skillName); BX.jutsuMemo[skillName] = c end
+    return c
+end
+function BX.jutsuColorRaw(skillName)
     if not skillName then return JUTSU_COLORS.DEFAULT end
     local exact = EXACT_SPELL_MAP[skillName]
     if exact then return exact end
@@ -1791,8 +1814,13 @@ local function updateActiveCasts()
     sectionPurge(os.clock())
 end
 
+local detTok = 0
+BX.startDet = function()
+detTok = detTok + 1
+local myTok = detTok
 task.spawn(function()
-    while alive() do
+    while alive() and detTok == myTok do
+        BX.beatDet = os.clock()
         sliceStart = os.clock()
         local ok, err = pcall(updateActiveCasts)
         if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
@@ -1805,9 +1833,11 @@ task.spawn(function()
                 delay = CYCLE_IDLE
             end
         end
-        task.wait(delay)
+        task.wait(delay + BX.backoff * 4)
     end
 end)
+end
+BX.startDet()
 end
 
 -- ============================================================
@@ -1941,11 +1971,23 @@ local function processObject(obj)
 
     -- 0. EVENT RIFTS & PORTALS (Debris or loose in Workspace)
     if objName == "Debris" and (cname == "Folder" or cname == "Model") then
-        for _, child in ipairs(obj:GetChildren()) do
-            local cName = tostring(child.Name or "")
-            if string.find(cName, "Sasuke") or (string.find(cName, "Portal") and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
-                pcall(processRift, child)
+        if S.bl_rift_en then
+            if (P_now - BX.debrisAt) >= 2.5 then
+                BX.debrisAt = P_now
+                local found = {}
+                local kids = obj:GetChildren()
+                local n = #kids
+                if n > 250 then n = 250 end
+                for i = 1, n do
+                    local child = kids[i]
+                    local cName = tostring(child.Name or "")
+                    if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
+                        found[#found + 1] = child
+                    end
+                end
+                BX.debrisRifts = found
             end
+            for i = 1, #BX.debrisRifts do pcall(processRift, BX.debrisRifts[i]) end
         end
         return
     end
@@ -2275,7 +2317,8 @@ local function runScanPass()
             if not ok then
                 _G.Bloodline_objErrors = (_G.Bloodline_objErrors or 0) + 1
             end
-            if (i % 16 == 0) and (t - sliceStart) > SCAN_SLICE_BUDGET then
+            if (t - sliceStart) > SCAN_SLICE_BUDGET then
+                BX.beatCol = os.clock()
                 task.wait()
                 if not alive() then return end
                 sliceStart = os.clock()
@@ -2346,13 +2389,22 @@ local function runScanPass()
     if not okC then cdFolderCache = nil end
 end
 
-task.spawn(function()
-    while alive() do
-        local ok, err = pcall(runScanPass)
-        if not ok then logDebug("Collector error: " .. tostring(err)) end
-        task.wait(SCAN_INTERVAL)
-    end
-end)
+local colTok = 0
+BX.startCol = function()
+    colTok = colTok + 1
+    local myTok = colTok
+    task.spawn(function()
+        while alive() and colTok == myTok do
+            BX.beatCol = os.clock()
+            local t0 = os.clock()
+            local ok, err = pcall(runScanPass)
+            if not ok then logDebug("Collector error: " .. tostring(err)) end
+            local took = os.clock() - t0
+            task.wait(max(SCAN_INTERVAL, took) + BX.backoff * 10)
+        end
+    end)
+end
+BX.startCol()
 end -- end of collector scope
 
 -- ============================================================
@@ -2373,6 +2425,29 @@ local rNow, rCamPos, rVpH, rTan, rBotX, rBotY = 0, Vector3.new(0, 0, 0), 0, 0, 0
 
 _G.Bloodline_renderFrameCount = 0
 _G.Bloodline_lastError = nil
+
+-- value reads are cached for 0.12s (staggered) and capped per frame
+function BX.get(inst)
+    local rec = BX.vals[inst]
+    if rec and ((rNow - rec.at) < 0.12 or BX.reads >= 24) then return rec.ok, rec.v end
+    BX.reads = BX.reads + 1
+    local ok, v = pcall(getValue, inst)
+    if rec then
+        rec.ok = ok; rec.v = v; rec.at = rNow
+    else
+        BX.vals[inst] = { ok = ok, v = v, at = rNow - math.random() * 0.12 }
+    end
+    return ok, v
+end
+
+-- root position is read once per frame, shared by all tag types
+function BX.pos(root)
+    local p = BX.posCache[root]
+    if p ~= nil then return true, p end
+    local ok, v = pcall(getPosOf, root)
+    if ok and v ~= nil then BX.posCache[root] = v end
+    return ok, v
+end
 
 -- Write Position / Size / line ends only if they changed since the last write
 local function place(s, key, x, y)
@@ -2551,8 +2626,8 @@ local function drawCorruptEntity(e, c)
     if S.bl_corrupt_box then
         place(e, "box", boxX, boxY)
         sizeIt(e, "box", w, h)
-        local boxCol = c.isPumpkin and Color3.fromRGB(255, 140, 0) or (S.bl_corrupt_col or COL_PURPLE)
-        if e.box.Color ~= boxCol then e.box.Color = boxCol end
+        local boxCol = c.isPumpkin and BX.RGB(255, 140, 0) or (S.bl_corrupt_col or COL_PURPLE)
+        if e.boxColS ~= boxCol then e.box.Color = boxCol; e.boxColS = boxCol end
         setVis(e, "box", true)
     else
         setVis(e, "box", false)
@@ -2589,8 +2664,8 @@ local function drawCorruptEntity(e, c)
                 e.lastText = label
             end
         end
-        local tagCol = c.isPumpkin and Color3.fromRGB(255, 200, 80) or COL_PURP_TXT
-        if e.tag.Color ~= tagCol then e.tag.Color = tagCol end
+        local tagCol = c.isPumpkin and BX.RGB(255, 200, 80) or COL_PURP_TXT
+        if e.tagColS ~= tagCol then e.tag.Color = tagCol; e.tagColS = tagCol end
         place(e, "tag", floor(sp.X), boxY - 16)
         setVis(e, "tag", true)
     else
@@ -2633,13 +2708,13 @@ local function drawRiftEntity(e, r)
 
     e.isShown = true
 
-    local riftCol = S.bl_rift_col or Color3.fromRGB(255, 60, 20)
-    local tagCol  = Color3.fromRGB(255, 195, 60)
+    local riftCol = S.bl_rift_col or BX.RGB(255, 60, 20)
+    local tagCol  = BX.RGB(255, 195, 60)
 
     if S.bl_rift_box then
         place(e, "box", boxX, boxY)
         sizeIt(e, "box", w, h)
-        if e.box.Color ~= riftCol then e.box.Color = riftCol end
+        if e.riftBoxS ~= riftCol then e.box.Color = riftCol; e.riftBoxS = riftCol end
         setVis(e, "box", true)
     else
         setVis(e, "box", false)
@@ -2659,7 +2734,7 @@ local function drawRiftEntity(e, r)
                 e.lastText = label
             end
         end
-        if e.tag.Color ~= tagCol then e.tag.Color = tagCol end
+        if e.tagColS ~= tagCol then e.tag.Color = tagCol; e.tagColS = tagCol end
         place(e, "tag", floor(sp.X), boxY - 16)
         setVis(e, "tag", true)
     else
@@ -2668,7 +2743,7 @@ local function drawRiftEntity(e, r)
 
     if S.bl_rift_trc and rBotX and rBotY then
         setLine(e, rBotX, rBotY, floor(sp.X), floor(sp.Y))
-        if e.tracer.Color ~= riftCol then e.tracer.Color = riftCol end
+        if e.riftTrS ~= riftCol then e.tracer.Color = riftCol; e.riftTrS = riftCol end
         setVis(e, "tracer", true)
     else
         setVis(e, "tracer", false)
@@ -2946,7 +3021,7 @@ local function renderJutsuTags()
             if rNow < cast.expireTime then
                 local root = (cast.who and roots[cast.who]) or cast.root
                 if root then
-                    local okP, rPos = pcall(getPosOf, root)
+                    local okP, rPos = BX.pos(root)
                     if okP and isValidVec3(rPos) then
                         local okS, sp, onScreen = pcall(WorldToScreen, rPos)
                         if okS and onScreen and isValidVec2(sp) then
@@ -3063,7 +3138,7 @@ local function renderSubTags()
                     end
 
                     if sc then
-                        local okV, subVal = pcall(getValue, sc)
+                        local okV, subVal = BX.get(sc)
                         if okV and type(subVal) == "number" then
                             local lastTs = SubRadar.lastVal[pn]
                             if lastTs == nil then
@@ -3083,14 +3158,14 @@ local function renderSubTags()
                             if exp and rNow < exp then
                                 local secLeft = math.ceil(exp - rNow)
                                 label = "[SUB: " .. tostring(secLeft) .. "s]"
-                                col = Color3.fromRGB(255, 75, 75)
+                                col = BX.RGB(255, 75, 75)
                             elseif not S.bl_sub_only_cd then
                                 label = "[SUB READY]"
-                                col = Color3.fromRGB(60, 255, 110)
+                                col = BX.RGB(60, 255, 110)
                             end
 
                             if label then
-                                local okP, rPos = pcall(getPosOf, root)
+                                local okP, rPos = BX.pos(root)
                                 if okP and isValidVec3(rPos) then
                                     local okS, sp, onScreen = pcall(WorldToScreen, rPos)
                                     if okS and onScreen and isValidVec2(sp) then
@@ -3186,9 +3261,9 @@ local function renderIFrameTags()
                     end
 
                     if inv then
-                        local okV, isInv = pcall(getValue, inv)
+                        local okV, isInv = BX.get(inv)
                         if okV and isInv == true then
-                            local okP, rPos = pcall(getPosOf, root)
+                            local okP, rPos = BX.pos(root)
                             if okP and isValidVec3(rPos) then
                                 local okS, sp, onScreen = pcall(WorldToScreen, rPos)
                                 if okS and onScreen and isValidVec2(sp) then
@@ -3199,7 +3274,7 @@ local function renderIFrameTags()
                                         count = count + 1
                                         local t = tags[count]
                                         local label = "[INVINCIBLE]"
-                                        local col = Color3.fromRGB(255, 215, 0)
+                                        local col = BX.RGB(255, 215, 0)
 
                                         if t.text ~= label then
                                             t.tag.Text = label
@@ -3290,11 +3365,11 @@ local function renderModeTags()
                     local awkVal = ""
                     local cdVal = 0
                     if entry.awk then
-                        local okA, a = pcall(getValue, entry.awk)
+                        local okA, a = BX.get(entry.awk)
                         if okA and type(a) == "string" then awkVal = a end
                     end
                     if entry.cd then
-                        local okC, c = pcall(getValue, entry.cd)
+                        local okC, c = BX.get(entry.cd)
                         if okC and type(c) == "number" then cdVal = c end
                     end
 
@@ -3312,16 +3387,16 @@ local function renderModeTags()
                         elseif S.bl_mode_name then
                             label = "[" .. modeName .. "]"
                         end
-                        col = Color3.fromRGB(205, 80, 255)
+                        col = BX.RGB(205, 80, 255)
                     elseif S.bl_mode_cd and cdVal > 0 then
                         -- Mode is on cooldown!
                         local secLeft = math.ceil(cdVal)
                         label = "[MODE CD: " .. tostring(secLeft) .. "s]"
-                        col = Color3.fromRGB(255, 140, 40)
+                        col = BX.RGB(255, 140, 40)
                     end
 
                     if label then
-                        local okP, rPos = pcall(getPosOf, root)
+                        local okP, rPos = BX.pos(root)
                         if okP and isValidVec3(rPos) then
                             local okS, sp, onScreen = pcall(WorldToScreen, rPos)
                             if okS and onScreen and isValidVec2(sp) then
@@ -3424,27 +3499,27 @@ local function renderStunTags()
                     local isBlocking, isHyper, isStunned, isParried, isKnocked, isGripped = false, false, false, false, false, false
 
                     if entry.block then
-                        local ok, v = pcall(getValue, entry.block)
+                        local ok, v = BX.get(entry.block)
                         if ok and v == true then isBlocking = true end
                     end
                     if entry.hyper then
-                        local ok, v = pcall(getValue, entry.hyper)
+                        local ok, v = BX.get(entry.hyper)
                         if ok and v == true then isHyper = true end
                     end
                     if entry.stun then
-                        local ok, v = pcall(getValue, entry.stun)
+                        local ok, v = BX.get(entry.stun)
                         if ok and v == true then isStunned = true end
                     end
                     if entry.parry then
-                        local ok, v = pcall(getValue, entry.parry)
+                        local ok, v = BX.get(entry.parry)
                         if ok and v == true then isParried = true end
                     end
                     if entry.knock then
-                        local ok, v = pcall(getValue, entry.knock)
+                        local ok, v = BX.get(entry.knock)
                         if ok and v == true then isKnocked = true end
                     end
                     if entry.grip then
-                        local ok, v = pcall(getValue, entry.grip)
+                        local ok, v = BX.get(entry.grip)
                         if ok and v == true then isGripped = true end
                     end
 
@@ -3454,38 +3529,38 @@ local function renderStunTags()
                     if S.bl_stun_knock and (isKnocked or isGripped) then
                         if isGripped then
                             parts[#parts + 1] = "[BEING GRIPPED]"
-                            tagCol = Color3.fromRGB(255, 45, 45)
+                            tagCol = BX.RGB(255, 45, 45)
                         else
                             parts[#parts + 1] = "[KNOCKED]"
-                            tagCol = Color3.fromRGB(255, 60, 60)
+                            tagCol = BX.RGB(255, 60, 60)
                         end
                     else
                         if S.bl_stun_hit then
                             if isParried then
                                 parts[#parts + 1] = "[PARRIED]"
-                                tagCol = tagCol or Color3.fromRGB(255, 230, 50)
+                                tagCol = tagCol or BX.RGB(255, 230, 50)
                             elseif isStunned then
                                 parts[#parts + 1] = "[STUNNED]"
-                                tagCol = tagCol or Color3.fromRGB(255, 225, 45)
+                                tagCol = tagCol or BX.RGB(255, 225, 45)
                             end
                         end
                         if S.bl_stun_hyper and isHyper then
                             parts[#parts + 1] = "[HYPERARMOR]"
-                            tagCol = tagCol or Color3.fromRGB(255, 155, 0)
+                            tagCol = tagCol or BX.RGB(255, 155, 0)
                         end
                         if S.bl_stun_block and isBlocking then
                             parts[#parts + 1] = "[BLOCKING]"
                             if isHyper then
-                                tagCol = Color3.fromRGB(255, 175, 50)
+                                tagCol = BX.RGB(255, 175, 50)
                             else
-                                tagCol = tagCol or Color3.fromRGB(60, 210, 255)
+                                tagCol = tagCol or BX.RGB(60, 210, 255)
                             end
                         end
                     end
 
                     if #parts > 0 and tagCol then
                         local label = table.concat(parts, " ")
-                        local okP, rPos = pcall(getPosOf, root)
+                        local okP, rPos = BX.pos(root)
                         if okP and isValidVec3(rPos) then
                             local okS, sp, onScreen = pcall(WorldToScreen, rPos)
                             if okS and onScreen and isValidVec2(sp) then
@@ -3976,6 +4051,9 @@ local function getClickedLeaderboardPlayer(mx, my)
 end
 
 local function handleLeftClick(mx, my)
+    local nowClick = os.clock()
+    if (nowClick - BX.lastClickAt) < 0.2 then return false end
+    BX.lastClickAt = nowClick
     -- If JDUI menu is open, let user interact with JDUI without triggering inspector
     if ui and ui.IsOpen and ui:IsOpen() then return false end
 
@@ -4087,6 +4165,14 @@ local function renderFrame()
         return
     end
 
+    BX.reads = 0
+    BX.posCache = {}
+    if (rNow - BX.pruneAt) > 30 then
+        BX.pruneAt = rNow
+        for k, r in pairs(BX.vals) do
+            if (rNow - r.at) > 20 then BX.vals[k] = nil end
+        end
+    end
     rCamPos = camPos
     rVpH    = viewport.Y
     rTan    = tanHalfFov2
@@ -4106,16 +4192,6 @@ local function renderFrame()
         rebuildDrawLists()
     end
 
-    _G.Bloodline_DebugState = {
-        trackedMobs = #trackedMobs,
-        trackedCorrupt = #trackedCorrupt,
-        trackedRifts = #trackedRifts,
-        trackedNPCs = #trackedNPCs,
-        trackedItems = #trackedItems,
-        drawMobs = #drawMobs,
-        drawItems = #drawItems,
-        scanEpoch = scanEpoch,
-    }
 
     pcall(renderMobs)
     pcall(renderCorrupt)
@@ -4132,7 +4208,8 @@ local function renderFrame()
     pcall(renderStunTags)
 end
 
-_G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
+BX.onRender = function()
+    BX.beatRender = os.clock()
     if not alive() then
         if _G.Bloodline_cleanup then
             pcall(_G.Bloodline_cleanup)
@@ -4164,7 +4241,7 @@ _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
 
     -- Frame limiter: 15% tolerance below the cap so it follows your display refresh rate
     local now = os.clock()
-    if (now - lastRenderClock) < MIN_FRAME_TIME then return end
+    if (now - lastRenderClock) < (MIN_FRAME_TIME + BX.backoff) then return end
     lastRenderClock = now
     rNow = now
 
@@ -4179,6 +4256,50 @@ _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
     if not ok then
         _G.Bloodline_lastError = tostring(err)
         logDebug("RenderStepped error: " .. tostring(err))
+    end
+
+    -- load shedding: if a frame was expensive, back off so slow PCs never stall
+    local cost = os.clock() - now
+    if cost > 0.006 then
+        local b = cost * 2
+        if b > 0.12 then b = 0.12 end
+        if b > BX.backoff then BX.backoff = b end
+    else
+        BX.backoff = BX.backoff * 0.9
+        if BX.backoff < 0.0005 then BX.backoff = 0 end
+    end
+end
+
+BX.connectRender = function()
+    _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
+        local okR, eR = pcall(BX.onRender)
+        if not okR then logDebug("Render callback error: " .. tostring(eR)) end
+    end)
+end
+BX.connectRender()
+
+task.spawn(function()
+    while alive() do
+        task.wait(3)
+        local now = os.clock()
+        if BX.startCol and (now - BX.beatCol) > 15 then
+            BX.beatCol = now
+            logDebug("Collector stalled, restarting it.", true)
+            pcall(BX.startCol)
+        end
+        if BX.startDet and (now - BX.beatDet) > 15 then
+            BX.beatDet = now
+            logDebug("Detector stalled, restarting it.", true)
+            pcall(BX.startDet)
+        end
+        if (now - BX.beatRender) > 8 then
+            BX.beatRender = now
+            logDebug("Render callback silent, reconnecting.", true)
+            if _G.Bloodline_renderConn then
+                pcall(function() _G.Bloodline_renderConn:Disconnect() end)
+            end
+            pcall(BX.connectRender)
+        end
     end
 end)
 
