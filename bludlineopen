@@ -1027,7 +1027,7 @@ local function alive()
     if INITIAL_JOB_ID ~= "" and currentJob ~= "" and currentJob ~= INITIAL_JOB_ID then
         local t = os.clock()
         if not BX.jobBadSince then BX.jobBadSince = t
-        elseif (t - BX.jobBadSince) > 3 then return false end
+        elseif (t - BX.jobBadSince) > 6 then return false end
     else
         BX.jobBadSince = nil
     end
@@ -1225,10 +1225,23 @@ local function serverNow()
     return os.time()
 end
 
-local function byDist(a, b) return a.dist < b.dist end
+local function byDist(a, b)
+    local da = (a and a.dist) or 1e9
+    local db = (b and b.dist) or 1e9
+    if da ~= da then da = 1e9 end
+    if db ~= db then db = 1e9 end
+    return da < db
+end
+
 local function itemLess(a, b)
-    if a.isRare ~= b.isRare then return a.isRare end
-    return a.dist < b.dist
+    local ra = (a and a.isRare == true)
+    local rb = (b and b.isRare == true)
+    if ra ~= rb then return ra end
+    local da = (a and a.dist) or 1e9
+    local db = (b and b.dist) or 1e9
+    if da ~= da then da = 1e9 end
+    if db ~= db then db = 1e9 end
+    return da < db
 end
 local function capList(list, n)
     for i = #list, n + 1, -1 do list[i] = nil end
@@ -1460,6 +1473,7 @@ local CYCLE_OFF        = 0.50
 local sliceStart = 0
 local function budgetYield()
     if (os.clock() - sliceStart) > FRAME_BUDGET then
+        BX.beatDet = os.clock()
         task.wait()
         sliceStart = os.clock()
     end
@@ -1491,7 +1505,13 @@ local function rootOf(char)
     return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
 end
 
-local function nearLess(a, b) return JutsuRadar.near[a] < JutsuRadar.near[b] end
+local function nearLess(a, b)
+    local da = (JutsuRadar.near and JutsuRadar.near[a]) or 1e9
+    local db = (JutsuRadar.near and JutsuRadar.near[b]) or 1e9
+    if da ~= da then da = 1e9 end
+    if db ~= db then db = 1e9 end
+    return da < db
+end
 
 -- Own player list: roots + distances + distance-sorted order + pruning of per-player caches
 local lastPlayerRefresh = -100
@@ -1967,7 +1987,23 @@ end
 -- bad/despawned instance can never abort the whole pass.
 local function processObject(obj)
     local cname = obj.ClassName
+    -- Fast reject: thousands of static parts/terrain/camera skipped immediately
+    if cname == "WedgePart" or cname == "CornerWedgePart"
+        or cname == "TrussPart" or cname == "Terrain" or cname == "Camera" then
+        return
+    end
+
     local objName = tostring(obj.Name or "")
+
+    -- Fast reject: ordinary static parts that are not portals
+    if cname == "Part" then
+        if not (string.find(objName, "Sasuke", 1, true) or string.find(objName, "Portal", 1, true)) then
+            return
+        end
+    end
+
+    -- Fast reject: folders other than Debris
+    if cname == "Folder" and objName ~= "Debris" then return end
 
     -- 0. EVENT RIFTS & PORTALS (Debris or loose in Workspace)
     if objName == "Debris" and (cname == "Folder" or cname == "Model") then
@@ -1992,17 +2028,13 @@ local function processObject(obj)
         return
     end
 
-    if string.find(objName, "Sasuke") or (string.find(objName, "Portal") and objName ~= "Portal" and objName ~= "Portal2" and objName ~= "ShukakuPortal") then
+    if string.find(objName, "Sasuke", 1, true) or (string.find(objName, "Portal", 1, true) and objName ~= "Portal" and objName ~= "Portal2" and objName ~= "ShukakuPortal") then
         if cname == "MeshPart" or cname == "Part" or cname == "Model" then
             pcall(processRift, obj)
             return
         end
     end
 
-    if cname == "Part" or cname == "WedgePart" or cname == "CornerWedgePart"
-        or cname == "TrussPart" or cname == "Terrain" or cname == "Folder" or cname == "Camera" then
-        return
-    end
     if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then return end
     if P_playerNames[objName] then return end   -- player characters are handled via Players
 
@@ -2309,19 +2341,25 @@ local function runScanPass()
     local total = #children
     local sliceStart = os.clock()
     for i = 1, total do
+        if scanEpoch ~= startEpoch then return end
         local obj = children[i]
         if obj then
-            local t = os.clock()
-            P_now = t
-            local ok = pcall(processObject, obj)
-            if not ok then
-                _G.Bloodline_objErrors = (_G.Bloodline_objErrors or 0) + 1
-            end
-            if (t - sliceStart) > SCAN_SLICE_BUDGET then
-                BX.beatCol = os.clock()
-                task.wait()
-                if not alive() then return end
-                sliceStart = os.clock()
+            local okPar, par = pcall(function() return obj.Parent end)
+            if okPar and par == Workspace then
+                local t = os.clock()
+                P_now = t
+                local ok = pcall(processObject, obj)
+                if not ok then
+                    _G.Bloodline_objErrors = (_G.Bloodline_objErrors or 0) + 1
+                end
+                if (t - sliceStart) > SCAN_SLICE_BUDGET then
+                    if scanEpoch ~= startEpoch then return end
+                    BX.beatCol = os.clock()
+                    task.wait()
+                    if not alive() then return end
+                    if scanEpoch ~= startEpoch then return end
+                    sliceStart = os.clock()
+                end
             end
         end
     end
@@ -4179,14 +4217,42 @@ local function renderFrame()
     rBotX   = floor(viewport.X * 0.5)
     rBotY   = floor(viewport.Y)
 
-    -- Fast-travel flush (>100 studs in one frame)
-    if lastCamPos and (camPos - lastCamPos).Magnitude > 100.0 then
+    -- Fast-travel flush (camera or character jumped > 75 studs)
+    local lpChar = Players.LocalPlayer and Players.LocalPlayer.Character
+    local lpRoot = lpChar and (lpChar:FindFirstChild("HumanoidRootPart") or lpChar:FindFirstChild("Torso"))
+    local myPos = lpRoot and lpRoot.Position
+    local camTeleported = lastCamPos and (camPos - lastCamPos).Magnitude > 75.0
+    local charTeleported = lastMyPos and myPos and (myPos - lastMyPos).Magnitude > 75.0
+
+    if camTeleported or charTeleported then
         scanEpoch = scanEpoch + 1
+        pcall(hideAllDrawings)
         trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
         mobCands = {}
+        drawMobs = {}
+        drawItems = {}
         drawDirty = true
+        trackedBeastTamer = nil
+        trackedChakraUsers = {}
+        trackedChakraCount = 0
+        JutsuRadar.roots = {}
+        JutsuRadar.near = {}
+        JutsuRadar.order = {}
+        JutsuRadar.activeCasts = {}
+        SubRadar.cache = {}
+        SubRadar.lastVal = {}
+        SubRadar.expiresAt = {}
+        IFrameRadar.cache = {}
+        ModeRadar.cache = {}
+        StunRadar.cache = {}
+        BX.vals = {}
+        BX.posCache = {}
+        negUntil = {}
+        negName = {}
+        lastMyPos = myPos or camPos
     end
     lastCamPos = camPos
+    if myPos and isValidVec3(myPos) then lastMyPos = myPos end
 
     if drawDirty or lastDrawSettingsVersion ~= settingsVersion then
         rebuildDrawLists()
