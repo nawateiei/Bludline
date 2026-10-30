@@ -26,6 +26,11 @@ if rawOldJDUI and type(rawOldJDUI) == "table" and rawOldJDUI.Destroy then
     pcall(rawset, _G, "JDUI", nil)
 end
 
+-- Ensure Roblox raw mouse/keyboard input is unblocked in Matcha
+if type(setrobloxinput) == "function" then
+    pcall(setrobloxinput, true)
+end
+
 -- Gracefully wait until the game world, player, and camera are loaded (with safety timeout for server hop / re-exec)
 local isLoadedWait = 0
 while isLoadedWait < 30 do -- max 6 seconds
@@ -49,7 +54,58 @@ while lpWait < 40 do -- max 8 seconds
     lpWait = lpWait + 1
 end
 
--- In-memory / Console Debug Logger (rate-limited, zero disk-I/O stutter)
+-- ============================================================
+--  CRASH TRACER & DIAGNOSTIC WATCHDOG ENGINE
+-- ============================================================
+local CrashTracker = {
+    history = {},
+    maxHistory = 60,
+    startTime = os.clock(),
+}
+_G.Bloodline_CrashHistory = CrashTracker.history
+
+local function logCrash(source, err, isFatal)
+    local errStr = tostring(err)
+    local trace = debug.traceback(errStr, 2)
+    local now = os.clock()
+    local dateStr = os.date("%H:%M:%S")
+
+    local fileLine = errStr:match(":(%d+):") or trace:match(":(%d+):") or "?"
+
+    local entry = {
+        time = dateStr,
+        uptime = string.format("%.1fs", now - CrashTracker.startTime),
+        source = tostring(source),
+        error = errStr,
+        line = fileLine,
+        trace = trace,
+        fatal = isFatal or false,
+    }
+    table.insert(CrashTracker.history, 1, entry)
+    if #CrashTracker.history > CrashTracker.maxHistory then
+        table.remove(CrashTracker.history)
+    end
+    _G.Bloodline_lastError = string.format("[%s @ L%s] %s", source, fileLine, errStr)
+
+    local logHeader = string.format("[BLOODLINE CRASH TRACER] [%s] Source: %s (Line: %s)", dateStr, source, fileLine)
+    local logBody = string.format("%s\nERROR: %s\nSTACK TRACE:\n%s\n--------------------------------------------------\n", logHeader, errStr, trace)
+
+    warn(logHeader .. ": " .. errStr)
+    print(logBody)
+
+    pcall(function()
+        if appendfile then
+            appendfile("bloodline_debug.txt", logBody)
+        elseif writefile then
+            writefile("bloodline_debug.txt", logBody)
+        end
+    end)
+
+    if notify then
+        pcall(notify, "WATCHDOG: " .. source, string.format("Line %s: %s", fileLine, errStr:sub(1, 75)), 8)
+    end
+end
+
 local lastLogMsg, lastLogAt = "", -100
 local function logDebug(msg, force)
     msg = tostring(msg)
@@ -60,7 +116,11 @@ local function logDebug(msg, force)
     end
     lastLogMsg = msg
     lastLogAt = now
-    warn("[Bloodline] " .. msg)
+    local line = string.format("[Bloodline %s] %s", os.date("%H:%M:%S"), msg)
+    print(line)
+    pcall(function()
+        if appendfile then appendfile("bloodline_debug.txt", line .. "\n") end
+    end)
 end
 
 -- IEEE-754 Validation Helpers
@@ -321,9 +381,9 @@ local FRIENDLY_NPCS = {
     ["Chieftess Kaguya Oceansucks, Former Anbu"] = true,
 }
 
--- Forward declarations for inspector controls
-local cycleInspectPlayer
-local hideProfileCard
+-- Forward declarations attached to BX to avoid burning file-level local registers
+BX.cycleInspectPlayer = nil
+BX.hideProfileCard = nil
 
 -- ============================================================
 --  SETTINGS SNAPSHOT & JDUI MENU INTERFACE
@@ -366,6 +426,7 @@ local S = {
     bl_npc_box = false,
     bl_npc_name = true,
     bl_npc_dist = true,
+
 
     -- Rare Items & Alerts
     bl_rare_notif = true,
@@ -500,6 +561,7 @@ if ok_jdui and res_jdui then
         ui:SetOverflow("Scroll")
         ui:SetLayout("Compact")
         ui.CaptureInput = false -- CRITICAL: Never let JDUI call setrobloxinput(false)! Completely eliminates game input lag / "ping" feel
+        if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
         if ui.SetOpen then pcall(ui.SetOpen, ui, false) else ui.Visible = false end
     end)
 
@@ -618,7 +680,21 @@ if ok_jdui and res_jdui then
             settingsVersion = settingsVersion + 1
         end
     })
-    islCfg:AddToggle({ Title = "Detect Own Jutsu (Self Test)", Flag = "bl_jutsu_self", Default = false, Callback = function(v) S.bl_jutsu_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({
+        Title = "Detect Own Jutsu (Self Test)",
+        Flag = "bl_jutsu_self",
+        Default = false,
+        Callback = function(v)
+            S.bl_jutsu_self = v
+            if not v then
+                local lp = Players.LocalPlayer
+                if lp and JutsuRadar.activeCasts then
+                    JutsuRadar.activeCasts[lp.Name] = nil
+                end
+            end
+            settingsVersion = settingsVersion + 1
+        end
+    })
     islCfg:AddToggle({ Title = "Show Own Sub Status", Flag = "bl_sub_self", Default = false, Callback = function(v) S.bl_sub_self = v; settingsVersion = settingsVersion + 1 end })
     islCfg:AddToggle({ Title = "Show Own I-Frames", Flag = "bl_iframe_self", Default = false, Callback = function(v) S.bl_iframe_self = v; settingsVersion = settingsVersion + 1 end })
     islCfg:AddToggle({ Title = "Show Own Mode Status", Flag = "bl_mode_self", Default = false, Callback = function(v) S.bl_mode_self = v; settingsVersion = settingsVersion + 1 end })
@@ -706,13 +782,13 @@ if ok_jdui and res_jdui then
     islInspect:AddButton({
         Title = "Inspect Next Player ->",
         Callback = function()
-            if cycleInspectPlayer then pcall(cycleInspectPlayer, 1) end
+            if BX.cycleInspectPlayer then pcall(BX.cycleInspectPlayer, 1) end
         end
     })
     islInspect:AddButton({
         Title = "Close Profile Card (X)",
         Callback = function()
-            if hideProfileCard then pcall(hideProfileCard) end
+            if BX.hideProfileCard then pcall(BX.hideProfileCard) end
         end
     })
 
@@ -1056,24 +1132,25 @@ local function alive()
         return cachedAlive
     end
     lastAliveCheck = now
+
     local okLP, lp = pcall(function() return Players.LocalPlayer end)
     if not okLP or not lp then
         cachedAlive = false
-        _G.Bloodline_running = false
         return false
     end
+
     local okPar, par = pcall(function() return lp.Parent end)
     if not okPar or par ~= Players then
         cachedAlive = false
-        _G.Bloodline_running = false
         return false
     end
+
     local okW, wPar = pcall(function() return Workspace.Parent end)
     if not okW or not wPar then
         cachedAlive = false
-        _G.Bloodline_running = false
         return false
     end
+
     cachedAlive = true
     return true
 end
@@ -1232,8 +1309,9 @@ _G.Bloodline_cleanup = function()
     end
 end
 
--- Emergency shutdown on teleport / server hop / world destroy
+-- Emergency shutdown handler (only for real, fatal game closures)
 local function emergencyShutdown(reason)
+    logCrash("Shutdown", "Emergency shutdown triggered: " .. tostring(reason), true)
     if _G.Bloodline_running then
         _G.Bloodline_running = false
         _G.Bloodline_gen = (_G.Bloodline_gen or 0) + 1
@@ -1244,23 +1322,26 @@ local function emergencyShutdown(reason)
     end
 end
 
--- 1. Fast Travel / Teleport listener
+-- 1. Fast Travel / Teleport listener (Flush only, DO NOT suicide the script!)
 pcall(function()
     local lp = Players.LocalPlayer
     if lp and lp.OnTeleport then
         _G.Bloodline_teleportConn = lp.OnTeleport:Connect(function(state)
-            emergencyShutdown("LocalPlayer.OnTeleport: " .. tostring(state))
+            logDebug("Teleport/Fast-travel event fired (state: " .. tostring(state) .. "). Flushing ESP smoothly...")
+            scanEpoch = scanEpoch + 1
+            if BX.hideAllDrawings then pcall(BX.hideAllDrawings) end
         end)
     end
 end)
 
--- 2. Ancestry listener (unparent on server change)
+-- 2. Ancestry listener (log only, do not suicide)
 pcall(function()
     local lp = Players.LocalPlayer
     if lp then
         _G.Bloodline_ancConn = lp.AncestryChanged:Connect(function(_, parent)
             if not parent then
-                emergencyShutdown("LocalPlayer unparented")
+                logDebug("LocalPlayer temporarily unparented from game")
+                if BX.hideAllDrawings then pcall(BX.hideAllDrawings) end
             end
         end)
     end
@@ -1269,15 +1350,15 @@ end)
 -- 3. Game shutdown / server disconnect
 pcall(function()
     game:BindToClose(function()
-        emergencyShutdown("game:BindToClose")
+        emergencyShutdown("game:BindToClose (game closing)")
     end)
 end)
 
--- 4. Disconnect screen listener
+-- 4. Disconnect screen listener (log only)
 pcall(function()
     local GuiService = game:GetService("GuiService")
     _G.Bloodline_guiConn = GuiService.ErrorMessageChanged:Connect(function()
-        emergencyShutdown("GuiService error")
+        logCrash("GuiService", "Roblox ErrorMessageChanged event fired", false)
     end)
 end)
 
@@ -1597,6 +1678,9 @@ function setCast(key, skill, ttl, root, who)
     local now = os.clock()
     local lp = Players.LocalPlayer
     local isSelf = (who and lp and who == lp.Name)
+    if isSelf and not S.bl_jutsu_self then
+        return
+    end
     local prefix = isSelf and "[SELF] " or ""
     local c = JutsuRadar.activeCasts[key]
     if c and c.skill == skill then
@@ -1738,6 +1822,8 @@ local function skillListFor(pName, pFolder, now)
 end
 
 local function checkPlayerCooldowns(pName, rec)
+    local lp = Players.LocalPlayer
+    if lp and pName == lp.Name and not S.bl_jutsu_self then return end
     local pCD = JutsuRadar.lastCD[pName]
     local baselineOnly = false
     if not pCD then
@@ -1773,6 +1859,8 @@ local function checkPlayerCooldowns(pName, rec)
 end
 
 local function checkPlayerCurrentSkill(pName, now)
+    local lp = Players.LocalPlayer
+    if lp and pName == lp.Name and not S.bl_jutsu_self then return end
     local cs = JutsuRadar.csCache[pName]
     if cs and (now - (JutsuRadar.csCacheAt[pName] or 0)) > CS_RECHECK then
         cs = nil
@@ -1949,28 +2037,33 @@ end
 
 local detTok = 0
 BX.startDet = function()
-detTok = detTok + 1
-local myTok = detTok
-task.spawn(function()
-    while alive() and detTok == myTok do
-        BX.beatDet = os.clock()
-        sliceStart = os.clock()
-        if alive() then
-            local ok, err = pcall(updateActiveCasts)
-            if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
-        end
-
-        local delay = CYCLE_OFF
-        if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en then
-            if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
-                delay = CYCLE_ACTIVE
-            else
-                delay = CYCLE_IDLE
+    detTok = detTok + 1
+    local myTok = detTok
+    task.spawn(function()
+        while _G.Bloodline_running and detTok == myTok do
+            BX.beatDet = os.clock()
+            sliceStart = os.clock()
+            if alive() then
+                local ok, err = xpcall(updateActiveCasts, function(e)
+                    return debug.traceback(tostring(e), 2)
+                end)
+                if not ok then
+                    logCrash("JutsuDetector", err, false)
+                    task.wait(1.0)
+                end
             end
+
+            local delay = CYCLE_OFF
+            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en then
+                if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
+                    delay = CYCLE_ACTIVE
+                else
+                    delay = CYCLE_IDLE
+                end
+            end
+            task.wait(delay + BX.backoff * 4)
         end
-        task.wait(delay + BX.backoff * 4)
-    end
-end)
+    end)
 end
 BX.startDet()
 end
@@ -2570,11 +2663,17 @@ BX.startCol = function()
     colTok = colTok + 1
     local myTok = colTok
     task.spawn(function()
-        while alive() and colTok == myTok do
+        while _G.Bloodline_running and colTok == myTok do
             BX.beatCol = os.clock()
-            local t0 = os.clock()
-            local ok, err = pcall(runScanPass)
-            if not ok then logDebug("Collector error: " .. tostring(err)) end
+            if alive() then
+                local ok, err = xpcall(runScanPass, function(e)
+                    return debug.traceback(tostring(e), 2)
+                end)
+                if not ok then
+                    logCrash("Collector", err, false)
+                    task.wait(1.0)
+                end
+            end
             task.wait(SCAN_INTERVAL + BX.backoff * 2)
         end
     end)
@@ -2586,34 +2685,42 @@ BX.startDeb = function()
     debTok = debTok + 1
     local myTok = debTok
     task.spawn(function()
-        while alive() and debTok == myTok do
+        while _G.Bloodline_running and debTok == myTok do
             BX.beatDeb = os.clock()
             if S.bl_rift_en and alive() then
-                local deb = Workspace:FindFirstChild("Debris")
-                if deb and alive() then
-                    local kids = deb:GetChildren()
-                    local found = {}
-                    local sliceStart = os.clock()
-                    for i = 1, #kids do
-                        if not alive() or debTok ~= myTok then return end
-                        local child = kids[i]
-                        if child and alive() then
-                            local okN, cName = pcall(function() return child.Name end)
-                            if okN and type(cName) == "string" and #cName > 0 and cName ~= "Part" then
-                                if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
-                                    found[#found + 1] = child
+                local ok, err = xpcall(function()
+                    local deb = Workspace:FindFirstChild("Debris")
+                    if deb and alive() then
+                        local kids = deb:GetChildren()
+                        local found = {}
+                        local sliceStart = os.clock()
+                        for i = 1, #kids do
+                            if not alive() or debTok ~= myTok then return end
+                            local child = kids[i]
+                            if child and alive() then
+                                local okN, cName = pcall(function() return child.Name end)
+                                if okN and type(cName) == "string" and #cName > 0 and cName ~= "Part" then
+                                    if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
+                                        found[#found + 1] = child
+                                    end
                                 end
                             end
+                            if (os.clock() - sliceStart) > 0.002 then
+                                task.wait(0.008)
+                                if not alive() or debTok ~= myTok then return end
+                                sliceStart = os.clock()
+                            end
                         end
-                        if (os.clock() - sliceStart) > 0.002 then
-                            task.wait(0.008)
-                            if not alive() or debTok ~= myTok then return end
-                            sliceStart = os.clock()
+                        if alive() then
+                            BX.debrisRifts = found
                         end
                     end
-                    if alive() then
-                        BX.debrisRifts = found
-                    end
+                end, function(e)
+                    return debug.traceback(tostring(e), 2)
+                end)
+                if not ok then
+                    logCrash("DebrisWorker", err, false)
+                    task.wait(1.0)
                 end
             end
             task.wait(0.50)
@@ -2627,11 +2734,17 @@ BX.startCs = function()
     csTok = csTok + 1
     local myTok = csTok
     task.spawn(function()
-        while alive() and csTok == myTok do
+        while _G.Bloodline_running and csTok == myTok do
             BX.beatCs = os.clock()
             if S.bl_cs_en and alive() then
-                local ok, err = pcall(scanChakra)
-                if not ok then cdFolderCache = nil end
+                local ok, err = xpcall(scanChakra, function(e)
+                    return debug.traceback(tostring(e), 2)
+                end)
+                if not ok then
+                    cdFolderCache = nil
+                    logCrash("ChakraSense", err, false)
+                    task.wait(1.0)
+                end
             end
             task.wait(0.25)
         end
@@ -2830,7 +2943,7 @@ local function drawMobEntity(e, m)
     return true
 end
 
-local function renderMobs()
+function BX.renderMobs()
     local count = 0
     if S.bl_mob_en then
         local list = drawMobs
@@ -2919,7 +3032,7 @@ local function drawCorruptEntity(e, c)
     return true
 end
 
-local function renderCorrupt()
+function BX.renderCorrupt()
     local count = 0
     if S.bl_corrupt_en then
         local list = trackedCorrupt
@@ -3002,7 +3115,7 @@ local function drawRiftEntity(e, r)
     return true
 end
 
-local function renderRifts()
+function BX.renderRifts()
     local count = 0
     if S.bl_rift_en then
         local list = trackedRifts
@@ -3066,7 +3179,7 @@ local function drawNPCEntity(e, n)
     return true
 end
 
-local function renderNPCs()
+function BX.renderNPCs()
     local count = 0
     if S.bl_npc_en then
         local list = trackedNPCs
@@ -3146,7 +3259,7 @@ local function drawItemEntity(e, it)
     return true
 end
 
-local function renderItems()
+function BX.renderItems()
     local count = 0
     if S.bl_item_en then
         local list = drawItems
@@ -3161,7 +3274,7 @@ end
 
 -- ---------------- CHAKRA SENSE HUD ----------------
 local lastCsText, lastCsTitle = "", ""
-local function renderChakraHud()
+function BX.renderChakraHud()
     if S.bl_cs_en and S.bl_cs_hud and trackedChakraCount > 0 then
         if lastCsText ~= trackedChakraText then
             csHudContent.Text = trackedChakraText
@@ -3241,7 +3354,7 @@ local function drawBeastTamer(bt)
     return true
 end
 
-local function renderBeastTamer()
+function BX.renderBeastTamer()
     local bt = trackedBeastTamer
     if not (bt and S.bl_ev_beast_esp and drawBeastTamer(bt)) then
         hideEventSlot()
@@ -3253,7 +3366,7 @@ end
 -- so a respawn / new character can never leave a tag stuck on a dead root. Position/text writes
 -- only happen when the value actually changed.
 local tagOffsets = {}
-local function hideJutsuTags(from)
+function BX.hideJutsuTags(from)
     local tags = JutsuRadar.tags
     for i = from, #tags do
         local t = tags[i]
@@ -3268,7 +3381,7 @@ local function hideJutsuTags(from)
     end
 end
 
-local function renderJutsuTags()
+function BX.renderJutsuTags()
     local tags = JutsuRadar.tags
     local count = 0
     if S.bl_jutsu_tag and next(JutsuRadar.activeCasts) then
@@ -3277,7 +3390,7 @@ local function renderJutsuTags()
         local showBox = S.bl_jutsu_box
         for _, cast in pairs(JutsuRadar.activeCasts) do
             if count >= maxTags then break end
-            if rNow < cast.expireTime then
+            if rNow < cast.expireTime and not (cast.isSelf and not S.bl_jutsu_self) then
                 local root = (cast.who and roots[cast.who]) or cast.root
                 if root then
                     local okP, rPos = BX.pos(root)
@@ -3347,10 +3460,10 @@ local function renderJutsuTags()
             end
         end
     end
-    hideJutsuTags(count + 1)
+    BX.hideJutsuTags(count + 1)
 end
 
-local function hideSubTags(from)
+function BX.hideSubTags(from)
     local tags = SubRadar.tags
     for i = from, #tags do
         local t = tags[i]
@@ -3361,7 +3474,7 @@ local function hideSubTags(from)
     end
 end
 
-local function renderSubTags()
+function BX.renderSubTags()
     local tags = SubRadar.tags
     local count = 0
     if S.bl_sub_en and JutsuRadar.order then
@@ -3470,11 +3583,11 @@ local function renderSubTags()
             end
         end
     end
-    hideSubTags(count + 1)
+    BX.hideSubTags(count + 1)
 end
 
 -- ---------------- I-FRAME / INVINCIBILITY OVERHEAD TAGS ----------------
-local function hideIFrameTags(from)
+function BX.hideIFrameTags(from)
     local tags = IFrameRadar.tags
     for i = from, #tags do
         local t = tags[i]
@@ -3486,7 +3599,7 @@ local function hideIFrameTags(from)
     end
 end
 
-local function renderIFrameTags()
+function BX.renderIFrameTags()
     local tags = IFrameRadar.tags
     local count = 0
     if S.bl_iframe_en and JutsuRadar.order then
@@ -3569,11 +3682,11 @@ local function renderIFrameTags()
             end
         end
     end
-    hideIFrameTags(count + 1)
+    BX.hideIFrameTags(count + 1)
 end
 
 -- ---------------- AWAKENING / MODE OVERHEAD TAGS ----------------
-local function hideModeTags(from)
+function BX.hideModeTags(from)
     local tags = ModeRadar.tags
     for i = from, #tags do
         local t = tags[i]
@@ -3585,7 +3698,7 @@ local function hideModeTags(from)
     end
 end
 
-local function renderModeTags()
+function BX.renderModeTags()
     local tags = ModeRadar.tags
     local count = 0
     if S.bl_mode_en and JutsuRadar.order then
@@ -3699,11 +3812,11 @@ local function renderModeTags()
             end
         end
     end
-    hideModeTags(count + 1)
+    BX.hideModeTags(count + 1)
 end
 
 -- ---------------- COMBAT STUN & STATE INDICATORS ----------------
-local function hideStunTags(from)
+function BX.hideStunTags(from)
     local tags = StunRadar.tags
     for i = from, #tags do
         local t = tags[i]
@@ -3715,7 +3828,7 @@ local function hideStunTags(from)
     end
 end
 
-local function renderStunTags()
+function BX.renderStunTags()
     local tags = StunRadar.tags
     local count = 0
     if S.bl_stun_en and JutsuRadar.order then
@@ -3863,7 +3976,7 @@ local function renderStunTags()
             end
         end
     end
-    hideStunTags(count + 1)
+    BX.hideStunTags(count + 1)
 end
 
 -- ============================================================
@@ -3872,105 +3985,107 @@ end
 -- ============================================================
 --  PLAYER INSPECTOR SYSTEM
 -- ============================================================
-local CARD_W = 400
-local CARD_H = 270
+local Card = {
+    W = 400,
+    H = 270,
+    visible = false,
+    player = nil,
+    charName = nil,
+    screenPos = Vector2.new(50, 120),
+    cachedMouse = nil,
+    lastM1State = false,
+    lastXState = false,
+    lines = {},
+}
+BX.Card = Card
 
-local cardBg = Drawing.new("Square")
-cardBg.Filled = true
-cardBg.Color = Color3.fromRGB(12, 15, 22)
-cardBg.Transparency = 0.94
-cardBg.Thickness = 1
-cardBg.Visible = false
+Card.bg = Drawing.new("Square")
+Card.bg.Filled = true
+Card.bg.Color = Color3.fromRGB(12, 15, 22)
+Card.bg.Transparency = 0.94
+Card.bg.Thickness = 1
+Card.bg.Visible = false
 
-local cardBorder = Drawing.new("Square")
-cardBorder.Filled = false
-cardBorder.Color = Color3.fromRGB(40, 110, 195)
-cardBorder.Thickness = 1.5
-cardBorder.Visible = false
+Card.border = Drawing.new("Square")
+Card.border.Filled = false
+Card.border.Color = Color3.fromRGB(40, 110, 195)
+Card.border.Thickness = 1.5
+Card.border.Visible = false
 
-local cardHeader = Drawing.new("Square")
-cardHeader.Filled = true
-cardHeader.Color = Color3.fromRGB(18, 24, 38)
-cardHeader.Transparency = 0.96
-cardHeader.Thickness = 1
-cardHeader.Visible = false
+Card.header = Drawing.new("Square")
+Card.header.Filled = true
+Card.header.Color = Color3.fromRGB(18, 24, 38)
+Card.header.Transparency = 0.96
+Card.header.Thickness = 1
+Card.header.Visible = false
 
-local cardHeaderLine = Drawing.new("Square")
-cardHeaderLine.Filled = true
-cardHeaderLine.Color = Color3.fromRGB(35, 130, 220)
-cardHeaderLine.Thickness = 1
-cardHeaderLine.Visible = false
+Card.headerLine = Drawing.new("Square")
+Card.headerLine.Filled = true
+Card.headerLine.Color = Color3.fromRGB(35, 130, 220)
+Card.headerLine.Thickness = 1
+Card.headerLine.Visible = false
 
-local cardTitle = Drawing.new("Text")
-cardTitle.Size = 13
-cardTitle.Font = Drawing.Fonts.SystemBold
-cardTitle.Color = Color3.fromRGB(255, 215, 75)
-cardTitle.Outline = true
-cardTitle.Visible = false
+Card.title = Drawing.new("Text")
+Card.title.Size = 13
+Card.title.Font = Drawing.Fonts.SystemBold
+Card.title.Color = Color3.fromRGB(255, 215, 75)
+Card.title.Outline = true
+Card.title.Visible = false
 
-local cardClose = Drawing.new("Text")
-cardClose.Size = 12
-cardClose.Font = Drawing.Fonts.SystemBold
-cardClose.Color = Color3.fromRGB(255, 85, 85)
-cardClose.Outline = true
-cardClose.Visible = false
+Card.close = Drawing.new("Text")
+Card.close.Size = 12
+Card.close.Font = Drawing.Fonts.SystemBold
+Card.close.Color = Color3.fromRGB(255, 85, 85)
+Card.close.Outline = true
+Card.close.Visible = false
 
-local cardHpBg = Drawing.new("Square")
-cardHpBg.Filled = true
-cardHpBg.Color = Color3.fromRGB(30, 34, 46)
-cardHpBg.Thickness = 1
-cardHpBg.Visible = false
+Card.hpBg = Drawing.new("Square")
+Card.hpBg.Filled = true
+Card.hpBg.Color = Color3.fromRGB(30, 34, 46)
+Card.hpBg.Thickness = 1
+Card.hpBg.Visible = false
 
-local cardHpFill = Drawing.new("Square")
-cardHpFill.Filled = true
-cardHpFill.Color = Color3.fromRGB(45, 210, 80)
-cardHpFill.Thickness = 1
-cardHpFill.Visible = false
+Card.hpFill = Drawing.new("Square")
+Card.hpFill.Filled = true
+Card.hpFill.Color = Color3.fromRGB(45, 210, 80)
+Card.hpFill.Thickness = 1
+Card.hpFill.Visible = false
 
-local CARD_LINES_COUNT = 14
-local cardLines = {}
-for i = 1, CARD_LINES_COUNT do
+for i = 1, 14 do
     local txt = Drawing.new("Text")
     txt.Size = 12
     txt.Font = Drawing.Fonts.System
     txt.Color = Color3.fromRGB(230, 230, 235)
     txt.Outline = true
     txt.Visible = false
-    cardLines[i] = txt
+    Card.lines[i] = txt
 end
 
 _G.Bloodline_ProfileDrawings = {
-    cardBg, cardBorder, cardHeader, cardHeaderLine, cardTitle, cardClose, cardHpBg, cardHpFill
+    Card.bg, Card.border, Card.header, Card.headerLine, Card.title, Card.close, Card.hpBg, Card.hpFill
 }
-for i = 1, CARD_LINES_COUNT do
-    table.insert(_G.Bloodline_ProfileDrawings, cardLines[i])
+for i = 1, 14 do
+    table.insert(_G.Bloodline_ProfileDrawings, Card.lines[i])
 end
 
-local cardVisible = false
-local inspectedPlayer = nil
-local inspectedCharName = nil
-local lastClickM1 = false
-local lastKeyX = false
-local cardScreenPos = Vector2.new(50, 120)
-
-hideProfileCard = function()
-    cardVisible = false
-    inspectedPlayer = nil
-    inspectedCharName = nil
-    cardBg.Visible = false
-    cardBorder.Visible = false
-    cardHeader.Visible = false
-    cardHeaderLine.Visible = false
-    cardTitle.Visible = false
-    cardClose.Visible = false
-    cardHpBg.Visible = false
-    cardHpFill.Visible = false
-    for i = 1, CARD_LINES_COUNT do
-        cardLines[i].Visible = false
+function BX.hideProfileCard()
+    Card.visible = false
+    Card.player = nil
+    Card.charName = nil
+    Card.bg.Visible = false
+    Card.border.Visible = false
+    Card.header.Visible = false
+    Card.headerLine.Visible = false
+    Card.title.Visible = false
+    Card.close.Visible = false
+    Card.hpBg.Visible = false
+    Card.hpFill.Visible = false
+    for i = 1, 14 do
+        Card.lines[i].Visible = false
     end
 end
 
-local function getLeaderboardLeftEdge()
+function BX.getLeaderboardLeftEdge()
     local lp = Players.LocalPlayer
     local pListGui = lp and lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("ClientGui")
     local mf = pListGui and pListGui:FindFirstChild("Mainframe")
@@ -3994,7 +4109,7 @@ local function getLeaderboardLeftEdge()
     return vp.X - 260
 end
 
-local function splitItemsIntoLines(items, maxPerLine, maxChars)
+function BX.splitItemsIntoLines(items, maxPerLine, maxChars)
     local lines = {}
     local cur = {}
     local curLen = 0
@@ -4014,7 +4129,7 @@ local function splitItemsIntoLines(items, maxPerLine, maxChars)
     return lines
 end
 
-local function fetchPlayerDetails(p)
+function BX.fetchPlayerDetails(p)
     local pName = p.Name
     local rs = game:GetService("ReplicatedStorage")
     local s = rs:FindFirstChild("Settings") and rs.Settings:FindFirstChild(pName)
@@ -4105,110 +4220,110 @@ local function fetchPlayerDetails(p)
     }
 end
 
-local function showProfileCard(player, charName)
+function BX.showProfileCard(player, charName)
     if not player then return end
-    inspectedPlayer = player
-    inspectedCharName = charName or player.Name
-    cardVisible = true
+    Card.player = player
+    Card.charName = charName or player.Name
+    Card.visible = true
 
     -- Position card to the LEFT of the leaderboard with a clean 16px gap (NO OVERLAP)
-    local lbX = getLeaderboardLeftEdge()
-    local posX = math.floor(lbX - CARD_W - 16)
+    local lbX = BX.getLeaderboardLeftEdge()
+    local posX = math.floor(lbX - Card.W - 16)
     if posX < 10 then posX = 10 end
     local posY = 45
-    cardScreenPos = Vector2.new(posX, posY)
+    Card.screenPos = Vector2.new(posX, posY)
 
-    local d = fetchPlayerDetails(player)
+    local d = BX.fetchPlayerDetails(player)
 
-    cardBg.Position = cardScreenPos
-    cardBg.Size = Vector2.new(CARD_W, CARD_H)
-    cardBg.Visible = true
+    Card.bg.Position = Card.screenPos
+    Card.bg.Size = Vector2.new(Card.W, Card.H)
+    Card.bg.Visible = true
 
-    cardBorder.Position = cardScreenPos
-    cardBorder.Size = Vector2.new(CARD_W, CARD_H)
-    cardBorder.Visible = true
+    Card.border.Position = Card.screenPos
+    Card.border.Size = Vector2.new(Card.W, Card.H)
+    Card.border.Visible = true
 
-    cardHeader.Position = cardScreenPos
-    cardHeader.Size = Vector2.new(CARD_W, 26)
-    cardHeader.Visible = true
+    Card.header.Position = Card.screenPos
+    Card.header.Size = Vector2.new(Card.W, 26)
+    Card.header.Visible = true
 
-    cardHeaderLine.Position = Vector2.new(posX, posY + 26)
-    cardHeaderLine.Size = Vector2.new(CARD_W, 1.5)
-    cardHeaderLine.Visible = true
+    Card.headerLine.Position = Vector2.new(posX, posY + 26)
+    Card.headerLine.Size = Vector2.new(Card.W, 1.5)
+    Card.headerLine.Visible = true
 
     local headerTitle = "[PROFILE] " .. d.name
-    if inspectedCharName and inspectedCharName ~= d.name and inspectedCharName ~= "" then
-        headerTitle = headerTitle .. " (" .. inspectedCharName .. ")"
+    if Card.charName and Card.charName ~= d.name and Card.charName ~= "" then
+        headerTitle = headerTitle .. " (" .. Card.charName .. ")"
     end
-    cardTitle.Position = Vector2.new(posX + 10, posY + 6)
-    cardTitle.Text = headerTitle
-    cardTitle.Visible = true
+    Card.title.Position = Vector2.new(posX + 10, posY + 6)
+    Card.title.Text = headerTitle
+    Card.title.Visible = true
 
-    cardClose.Position = Vector2.new(posX + CARD_W - 75, posY + 7)
-    cardClose.Text = "[X] Close"
-    cardClose.Visible = true
+    Card.close.Position = Vector2.new(posX + Card.W - 75, posY + 7)
+    Card.close.Text = "[X] Close"
+    Card.close.Visible = true
 
     -- Row 1: Clan / Bloodline (Left) & HP Text (Right)
     local lineY = posY + 34
-    cardLines[1].Position = Vector2.new(posX + 10, lineY)
-    cardLines[1].Text = "Clan / Bloodline: " .. d.clan
-    cardLines[1].Color = Color3.fromRGB(55, 215, 255)
-    cardLines[1].Visible = true
+    Card.lines[1].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[1].Text = "Clan / Bloodline: " .. d.clan
+    Card.lines[1].Color = Color3.fromRGB(55, 215, 255)
+    Card.lines[1].Visible = true
 
     local hpPct = d.maxHp > 0 and math.clamp(d.curHp / d.maxHp, 0, 1) or 0
-    cardLines[2].Position = Vector2.new(posX + CARD_W - 148, lineY)
-    cardLines[2].Text = string.format("Health: %d/%d (%d%%)", d.curHp, d.maxHp, math.floor(hpPct * 100))
-    cardLines[2].Color = hpPct > 0.5 and Color3.fromRGB(65, 235, 125) or (hpPct > 0.25 and Color3.fromRGB(245, 205, 50) or Color3.fromRGB(255, 75, 75))
-    cardLines[2].Visible = true
+    Card.lines[2].Position = Vector2.new(posX + Card.W - 148, lineY)
+    Card.lines[2].Text = string.format("Health: %d/%d (%d%%)", d.curHp, d.maxHp, math.floor(hpPct * 100))
+    Card.lines[2].Color = hpPct > 0.5 and Color3.fromRGB(65, 235, 125) or (hpPct > 0.25 and Color3.fromRGB(245, 205, 50) or Color3.fromRGB(255, 75, 75))
+    Card.lines[2].Visible = true
 
     -- Health Bar
     lineY = lineY + 18
-    local barW = CARD_W - 20
-    cardHpBg.Position = Vector2.new(posX + 10, lineY)
-    cardHpBg.Size = Vector2.new(barW, 6)
-    cardHpBg.Visible = true
+    local barW = Card.W - 20
+    Card.hpBg.Position = Vector2.new(posX + 10, lineY)
+    Card.hpBg.Size = Vector2.new(barW, 6)
+    Card.hpBg.Visible = true
 
-    cardHpFill.Position = Vector2.new(posX + 10, lineY)
-    cardHpFill.Size = Vector2.new(math.max(1, math.floor(barW * hpPct)), 6)
-    cardHpFill.Color = hpPct > 0.5 and Color3.fromRGB(45, 210, 80) or (hpPct > 0.25 and Color3.fromRGB(240, 200, 40) or Color3.fromRGB(240, 60, 60))
-    cardHpFill.Visible = true
+    Card.hpFill.Position = Vector2.new(posX + 10, lineY)
+    Card.hpFill.Size = Vector2.new(math.max(1, math.floor(barW * hpPct)), 6)
+    Card.hpFill.Color = hpPct > 0.5 and Color3.fromRGB(45, 210, 80) or (hpPct > 0.25 and Color3.fromRGB(240, 200, 40) or Color3.fromRGB(240, 60, 60))
+    Card.hpFill.Visible = true
 
     -- Row 2: Equipment (Weapon & Armor)
     lineY = lineY + 13
-    cardLines[3].Position = Vector2.new(posX + 10, lineY)
-    cardLines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. d.armor
-    cardLines[3].Color = Color3.fromRGB(225, 230, 240)
-    cardLines[3].Visible = true
+    Card.lines[3].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. d.armor
+    Card.lines[3].Color = Color3.fromRGB(225, 230, 240)
+    Card.lines[3].Visible = true
 
     -- Row 3: Mode & Rings
     lineY = lineY + 16
-    cardLines[4].Position = Vector2.new(posX + 10, lineY)
-    cardLines[4].Text = "Awakening: " .. d.mode .. "   |   Rings: " .. d.rings
-    cardLines[4].Color = Color3.fromRGB(205, 210, 225)
-    cardLines[4].Visible = true
+    Card.lines[4].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[4].Text = "Awakening: " .. d.mode .. "   |   Rings: " .. d.rings
+    Card.lines[4].Color = Color3.fromRGB(205, 210, 225)
+    Card.lines[4].Visible = true
 
     -- Row 4: Traits Header
     lineY = lineY + 18
     local tList = d.traitsList or {}
-    cardLines[5].Position = Vector2.new(posX + 10, lineY)
-    cardLines[5].Text = "▶ Traits & Innate Eyes (" .. #tList .. "):"
-    cardLines[5].Color = Color3.fromRGB(205, 125, 255)
-    cardLines[5].Visible = true
+    Card.lines[5].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[5].Text = "▶ Traits & Innate Eyes (" .. #tList .. "):"
+    Card.lines[5].Color = Color3.fromRGB(205, 125, 255)
+    Card.lines[5].Visible = true
 
     -- Traits Content
     lineY = lineY + 15
-    local tLines = splitItemsIntoLines(tList, 2, 54)
+    local tLines = BX.splitItemsIntoLines(tList, 2, 54)
     if #tLines == 0 then tLines = {"• None"} end
-    cardLines[6].Position = Vector2.new(posX + 15, lineY)
-    cardLines[6].Text = tLines[1] or ""
-    cardLines[6].Color = Color3.fromRGB(225, 195, 255)
-    cardLines[6].Visible = (tLines[1] ~= nil)
+    Card.lines[6].Position = Vector2.new(posX + 15, lineY)
+    Card.lines[6].Text = tLines[1] or ""
+    Card.lines[6].Color = Color3.fromRGB(225, 195, 255)
+    Card.lines[6].Visible = (tLines[1] ~= nil)
 
     lineY = lineY + 15
-    cardLines[7].Position = Vector2.new(posX + 15, lineY)
-    cardLines[7].Text = tLines[2] or ""
-    cardLines[7].Color = Color3.fromRGB(225, 195, 255)
-    cardLines[7].Visible = (tLines[2] ~= nil and tLines[2] ~= "")
+    Card.lines[7].Position = Vector2.new(posX + 15, lineY)
+    Card.lines[7].Text = tLines[2] or ""
+    Card.lines[7].Color = Color3.fromRGB(225, 195, 255)
+    Card.lines[7].Visible = (tLines[2] ~= nil and tLines[2] ~= "")
 
     if not (tLines[2] and tLines[2] ~= "") then
         lineY = lineY - 15
@@ -4217,39 +4332,53 @@ local function showProfileCard(player, charName)
     -- Skills Header
     lineY = lineY + 18
     local sList = d.skills or {}
-    cardLines[8].Position = Vector2.new(posX + 10, lineY)
-    cardLines[8].Text = "▶ Equipped Jutsu / Skills (" .. #sList .. "):"
-    cardLines[8].Color = Color3.fromRGB(255, 215, 60)
-    cardLines[8].Visible = true
+    Card.lines[8].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[8].Text = "▶ Equipped Jutsu / Skills (" .. #sList .. "):"
+    Card.lines[8].Color = Color3.fromRGB(255, 215, 60)
+    Card.lines[8].Visible = true
 
     -- Skills Content (up to 4 lines)
-    local sLines = splitItemsIntoLines(sList, 4, 58)
+    local sLines = BX.splitItemsIntoLines(sList, 4, 58)
     if #sLines == 0 then sLines = {"• None"} end
 
     for i = 1, 4 do
         local lIdx = 8 + i
         lineY = lineY + 15
         local txt = sLines[i]
-        cardLines[lIdx].Position = Vector2.new(posX + 15, lineY)
-        cardLines[lIdx].Text = txt or ""
-        cardLines[lIdx].Color = Color3.fromRGB(215, 230, 245)
-        cardLines[lIdx].Visible = (txt ~= nil and txt ~= "")
+        Card.lines[lIdx].Position = Vector2.new(posX + 15, lineY)
+        Card.lines[lIdx].Text = txt or ""
+        Card.lines[lIdx].Color = Color3.fromRGB(215, 230, 245)
+        Card.lines[lIdx].Visible = (txt ~= nil and txt ~= "")
     end
 
     -- Footer hint
     lineY = lineY + 18
-    cardLines[13].Position = Vector2.new(posX + 10, lineY)
-    cardLines[13].Text = "Tip: Click player on leaderboard again to close"
-    cardLines[13].Color = Color3.fromRGB(115, 125, 145)
-    cardLines[13].Visible = true
+    Card.lines[13].Position = Vector2.new(posX + 10, lineY)
+    Card.lines[13].Text = "Tip: Click player on leaderboard again to close"
+    Card.lines[13].Color = Color3.fromRGB(115, 125, 145)
+    Card.lines[13].Visible = true
 
-    cardLines[14].Visible = false
+    Card.lines[14].Visible = false
 end
 
-local lastM1State = false
-local lastXState = false
+function BX.getMouseCoords()
+    if not Card.cachedMouse then
+        local lp = Players.LocalPlayer
+        if lp and lp.GetMouse then
+            pcall(function() Card.cachedMouse = lp:GetMouse() end)
+        end
+    end
+    if Card.cachedMouse then
+        local okX, mx = pcall(function() return Card.cachedMouse.X end)
+        local okY, my = pcall(function() return Card.cachedMouse.Y end)
+        if okX and okY and type(mx) == "number" and type(my) == "number" then
+            return mx, my
+        end
+    end
+    return 0, 0
+end
 
-local function getClickedLeaderboardPlayer(mx, my)
+function BX.getClickedLeaderboardPlayer(mx, my)
     local cam = Workspace.CurrentCamera
     local vp = cam and cam.ViewportSize
     if vp and mx < (vp.X - 350) then return nil end
@@ -4309,50 +4438,59 @@ local function getClickedLeaderboardPlayer(mx, my)
     return nil
 end
 
-local function handleLeftClick(mx, my)
-    local nowClick = os.clock()
-    if (nowClick - BX.lastClickAt) < 0.2 then return false end
-    BX.lastClickAt = nowClick
+function BX.handleLeftClick(mx, my)
+    -- Fast path: if profile card is not visible and click is not over the leaderboard area, return immediately
+    local cam = Workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize
+    local nearLeaderboard = vp and (mx >= (vp.X - 350))
+    if not Card.visible and not nearLeaderboard then
+        return false
+    end
+
     -- If JDUI menu is open, let user interact with JDUI without triggering inspector
     if ui and ui.IsOpen and ui:IsOpen() then return false end
 
+    local nowClick = os.clock()
+    if (nowClick - BX.lastClickAt) < 0.2 then return false end
+    BX.lastClickAt = nowClick
+
     -- 1. Check if clicking on Card Close [X] button
-    if cardVisible then
-        if mx >= (cardScreenPos.X + CARD_W - 85) and mx <= (cardScreenPos.X + CARD_W + 10)
-           and my >= cardScreenPos.Y and my <= (cardScreenPos.Y + 30) then
-            hideProfileCard()
+    if Card.visible then
+        if mx >= (Card.screenPos.X + Card.W - 85) and mx <= (Card.screenPos.X + Card.W + 10)
+           and my >= Card.screenPos.Y and my <= (Card.screenPos.Y + 30) then
+            BX.hideProfileCard()
             return true
         end
     end
 
     -- 2. Check if clicking on Leaderboard Player
     if S.bl_inspect_en ~= false then
-        local p, cName = getClickedLeaderboardPlayer(mx, my)
+        local p, cName = BX.getClickedLeaderboardPlayer(mx, my)
         if p then
-            if cardVisible and inspectedPlayer == p then
+            if Card.visible and Card.player == p then
                 -- Clicked on the same player again: toggle closed!
-                hideProfileCard()
+                BX.hideProfileCard()
                 return true
             else
-                showProfileCard(p, cName)
+                BX.showProfileCard(p, cName)
                 return true
             end
         end
     end
 
     -- 3. If card is visible and clicking outside of card, close card ("unsee it by clicking off")
-    if cardVisible then
-        if mx < (cardScreenPos.X - 10) or mx > (cardScreenPos.X + CARD_W + 10)
-           or my < (cardScreenPos.Y - 10) or my > (cardScreenPos.Y + CARD_H + 10) then
-            hideProfileCard()
+    if Card.visible then
+        if mx < (Card.screenPos.X - 10) or mx > (Card.screenPos.X + Card.W + 10)
+           or my < (Card.screenPos.Y - 10) or my > (Card.screenPos.Y + Card.H + 10) then
+            BX.hideProfileCard()
             return true
         end
     end
     return false
 end
 
-local function handleXKey()
-    if cardVisible then hideProfileCard() end
+function BX.handleXKey()
+    if Card.visible then BX.hideProfileCard() end
 end
 
 -- Fallback native event connection via UserInputService
@@ -4363,33 +4501,35 @@ end
 _G.Bloodline_inputConn = UserInputService.InputBegan:Connect(function(input)
     local itype = input.UserInputType
     if itype == Enum.UserInputType.MouseButton1 then
-        local lp = Players.LocalPlayer
-        local mouse = lp and lp:GetMouse()
-        local mx = (input.Position and input.Position.X) or (mouse and mouse.X) or 0
-        local my = (input.Position and input.Position.Y) or (mouse and mouse.Y) or 0
-        pcall(handleLeftClick, mx, my)
+        local pos = input.Position
+        local mx = pos and pos.X or 0
+        local my = pos and pos.Y or 0
+        if mx == 0 and my == 0 then
+            mx, my = BX.getMouseCoords()
+        end
+        pcall(BX.handleLeftClick, mx, my)
     elseif itype == Enum.UserInputType.Keyboard then
         if input.KeyCode == Enum.KeyCode.X then
-            pcall(handleXKey)
+            pcall(BX.handleXKey)
         end
     end
 end)
 
-cycleInspectPlayer = function(delta)
+function BX.cycleInspectPlayer(delta)
     local all = Players:GetPlayers()
     if #all == 0 then return end
     local curIdx = 1
-    if inspectedPlayer then
+    if Card.player then
         for i, p in ipairs(all) do
-            if p == inspectedPlayer then curIdx = i; break end
+            if p == Card.player then curIdx = i; break end
         end
     end
     local nextIdx = ((curIdx - 1 + delta) % #all) + 1
-    showProfileCard(all[nextIdx])
+    BX.showProfileCard(all[nextIdx])
 end
 
 -- ---------------- HIDE EVERYTHING (camera lost / render error) ----------------
-local function hideAllDrawings()
+function BX.hideAllDrawings()
     for i = 1, MOB_POOL_SIZE do local s = mobPool[i]; s.isShown = true; hideMobSlot(s) end
     for i = 1, CORRUPT_POOL_SIZE do local s = corruptPool[i]; s.isShown = true; hideCorruptSlot(s) end
     for i = 1, RIFT_POOL_SIZE do local s = riftPool[i]; s.isShown = true; hideRiftSlot(s) end
@@ -4398,15 +4538,15 @@ local function hideAllDrawings()
     setHud(csHudTitle, false)
     setHud(csHudContent, false)
     hideEventSlot()
-    hideJutsuTags(1)
-    hideSubTags(1)
-    hideIFrameTags(1)
-    hideModeTags(1)
-    hideStunTags(1)
-    hideProfileCard()
+    BX.hideJutsuTags(1)
+    BX.hideSubTags(1)
+    BX.hideIFrameTags(1)
+    BX.hideModeTags(1)
+    BX.hideStunTags(1)
+    BX.hideProfileCard()
 end
 
-local function renderFrame()
+function BX.renderFrame()
     local cam = Workspace.CurrentCamera
     local camPos = cam and cam.Position
     local viewport = cam and cam.ViewportSize
@@ -4414,13 +4554,13 @@ local function renderFrame()
     -- No usable camera (loading screen / respawn / minimized): clear the screen instead of
     -- leaving the last frame's boxes frozen on it.
     if not (camPos and isValidVec3(camPos) and viewport and viewport.X > 20 and viewport.Y > 20) then
-        hideAllDrawings()
+        BX.hideAllDrawings()
         return
     end
 
     local tanHalfFov2 = math.tan(math.rad(cam.FieldOfView or 70) * 0.5) * 2.0
     if not isValidNum(tanHalfFov2) or tanHalfFov2 <= 0.001 then
-        hideAllDrawings()
+        BX.hideAllDrawings()
         return
     end
 
@@ -4448,7 +4588,7 @@ local function renderFrame()
     if (camTeleported or charTeleported) and (rNow - (BX.lastTeleportFlush or 0)) > 2.0 then
         BX.lastTeleportFlush = rNow
         scanEpoch = scanEpoch + 1
-        pcall(hideAllDrawings)
+        pcall(BX.hideAllDrawings)
         trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
         mobCands = {}
         drawMobs = {}
@@ -4481,19 +4621,19 @@ local function renderFrame()
     end
 
 
-    pcall(renderMobs)
-    pcall(renderCorrupt)
-    pcall(renderRifts)
-    pcall(renderNPCs)
-    pcall(renderItems)
-    pcall(renderChakraHud)
-    pcall(renderBeastTamer)
+    pcall(BX.renderMobs)
+    pcall(BX.renderCorrupt)
+    pcall(BX.renderRifts)
+    pcall(BX.renderNPCs)
+    pcall(BX.renderItems)
+    pcall(BX.renderChakraHud)
+    pcall(BX.renderBeastTamer)
     tagOffsets = {}
-    pcall(renderJutsuTags)
-    pcall(renderSubTags)
-    pcall(renderIFrameTags)
-    pcall(renderModeTags)
-    pcall(renderStunTags)
+    pcall(BX.renderJutsuTags)
+    pcall(BX.renderSubTags)
+    pcall(BX.renderIFrameTags)
+    pcall(BX.renderModeTags)
+    pcall(BX.renderStunTags)
 end
 
 BX.onRender = function(now)
@@ -4501,45 +4641,40 @@ BX.onRender = function(now)
     BX.beatRender = now
     rNow = now
     if not alive() then
-        if _G.Bloodline_cleanup then
-            pcall(_G.Bloodline_cleanup)
-            _G.Bloodline_cleanup = nil
-        end
         return
     end
 
     -- Direct hardware click & key detection (0ms latency, bypasses Roblox GUI input sinks)
     if ismouse1pressed then
         local isM1 = ismouse1pressed()
-        if isM1 and not lastM1State then
-            local lp = Players.LocalPlayer
-            local mouse = lp and lp:GetMouse()
-            if mouse then
-                pcall(handleLeftClick, mouse.X, mouse.Y)
-            end
+        if isM1 and not Card.lastM1State then
+            local mx, my = BX.getMouseCoords()
+            pcall(BX.handleLeftClick, mx, my)
         end
-        lastM1State = isM1
+        Card.lastM1State = isM1
     end
 
     if iskeypressed then
         local isX = iskeypressed(0x58) -- VK_KEY_X
-        if isX and not lastXState then
-            if cardVisible then pcall(hideProfileCard) end
+        if isX and not Card.lastXState then
+            if Card.visible then pcall(BX.hideProfileCard) end
         end
-        lastXState = isX
+        Card.lastXState = isX
     end
 
     _G.Bloodline_renderFrameCount = _G.Bloodline_renderFrameCount + 1
 
     if now - lastSettingsPoll >= SETTINGS_POLL then
         lastSettingsPoll = now
+        if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
         pcall(refreshSettings)
     end
 
-    local ok, err = pcall(renderFrame)
+    local ok, err = xpcall(BX.renderFrame, function(e)
+        return debug.traceback(tostring(e), 2)
+    end)
     if not ok then
-        _G.Bloodline_lastError = tostring(err)
-        logDebug("RenderStepped error: " .. tostring(err))
+        logCrash("RenderFrame", err, false)
     end
 
     -- load shedding: adaptive backoff that protects slow PCs from graphics crashes while keeping fast PCs at 90 FPS
@@ -4559,37 +4694,56 @@ BX.connectRender = function()
         local now = os.clock()
         if (now - lastRenderClock) < (MIN_FRAME_TIME + BX.backoff) then return end
         lastRenderClock = now
-        local okR, eR = pcall(BX.onRender, now)
-        if not okR then logDebug("Render callback error: " .. tostring(eR)) end
+        local okR, eR = xpcall(function() return BX.onRender(now) end, function(e)
+            return debug.traceback(tostring(e), 2)
+        end)
+        if not okR then
+            logCrash("RenderSteppedConn", eR, false)
+        end
     end)
 end
 BX.connectRender()
 
+-- ============================================================
+--  SELF-HEALING WATCHDOG SUPERVISOR (Never terminates on temporary glitches)
+-- ============================================================
 task.spawn(function()
-    while alive() do
-        task.wait(3)
+    while _G.Bloodline_running do
+        task.wait(2.5)
         local now = os.clock()
-        if BX.startCol and (now - BX.beatCol) > 15 then
+
+        -- Check Collector
+        if BX.startCol and (now - (BX.beatCol or 0)) > 8 then
+            logCrash("Watchdog", string.format("Collector worker stalled for %.1fs! Auto-restarting...", now - (BX.beatCol or 0)), false)
             BX.beatCol = now
-            logDebug("Collector stalled, restarting it.", true)
             pcall(BX.startCol)
         end
-        if BX.startDet and (now - BX.beatDet) > 15 then
+
+        -- Check Detector
+        if BX.startDet and (now - (BX.beatDet or 0)) > 8 then
+            logCrash("Watchdog", string.format("Jutsu detector stalled for %.1fs! Auto-restarting...", now - (BX.beatDet or 0)), false)
             BX.beatDet = now
-            logDebug("Detector stalled, restarting it.", true)
             pcall(BX.startDet)
         end
-        if BX.startDeb and (now - (BX.beatDeb or now)) > 15 then
+
+        -- Check Debris
+        if BX.startDeb and (now - (BX.beatDeb or 0)) > 8 then
+            logCrash("Watchdog", string.format("Debris worker stalled for %.1fs! Auto-restarting...", now - (BX.beatDeb or 0)), false)
             BX.beatDeb = now
             pcall(BX.startDeb)
         end
-        if BX.startCs and (now - (BX.beatCs or now)) > 15 then
+
+        -- Check Chakra Sense
+        if BX.startCs and (now - (BX.beatCs or 0)) > 8 then
+            logCrash("Watchdog", string.format("Chakra Sense stalled for %.1fs! Auto-restarting...", now - (BX.beatCs or 0)), false)
             BX.beatCs = now
             pcall(BX.startCs)
         end
-        if (now - BX.beatRender) > 8 then
+
+        -- Check Renderer
+        if (now - (BX.beatRender or 0)) > 5 then
+            logCrash("Watchdog", string.format("Renderer silent for %.1fs! Reconnecting RenderStepped...", now - (BX.beatRender or 0)), false)
             BX.beatRender = now
-            logDebug("Render callback silent, reconnecting.", true)
             if _G.Bloodline_renderConn then
                 pcall(function() _G.Bloodline_renderConn:Disconnect() end)
             end
@@ -4598,6 +4752,43 @@ task.spawn(function()
     end
 end)
 
-notify("Bloodline ESP", "Merged build activated!", 4)
+-- Diagnostic Inspection Helpers
+_G.Bloodline_DumpLogs = function()
+    local hist = CrashTracker.history
+    print("==================================================")
+    print(string.format("=== BLOODLINE CRASH REPORT (%d events logged) ===", #hist))
+    print("==================================================")
+    if #hist == 0 then
+        print(">> Clean run! Zero crashes or thread failures logged.")
+    else
+        for i = 1, #hist do
+            local e = hist[i]
+            print(string.format("[%d] [%s | Uptime: %s] SOURCE: %s | LINE: %s", i, e.time, e.uptime, e.source, e.line))
+            print("    ERROR: " .. e.error)
+            print("    TRACE: " .. e.trace)
+            print("--------------------------------------------------")
+        end
+    end
+    return string.format("Total events: %d (Logs written to bloodline_debug.txt)", #hist)
+end
+
+_G.Bloodline_Status = function()
+    local now = os.clock()
+    print("=== BLOODLINE WATCHDOG LIVE STATUS ===")
+    print("Running: " .. tostring(_G.Bloodline_running))
+    print("Gen: " .. tostring(_G.Bloodline_gen))
+    print("Uptime: " .. string.format("%.1fs", now - CrashTracker.startTime))
+    print("Render Frames: " .. tostring(_G.Bloodline_renderFrameCount))
+    print("Collector Beat: " .. string.format("%.2fs ago", now - (BX.beatCol or 0)))
+    print("Detector Beat: " .. string.format("%.2fs ago", now - (BX.beatDet or 0)))
+    print("Debris Beat: " .. string.format("%.2fs ago", now - (BX.beatDeb or 0)))
+    print("Chakra Beat: " .. string.format("%.2fs ago", now - (BX.beatCs or 0)))
+    print("Render Beat: " .. string.format("%.2fs ago", now - (BX.beatRender or 0)))
+    print("Backoff Delay: " .. string.format("%.4fs", BX.backoff or 0))
+    print("Last Error: " .. tostring(_G.Bloodline_lastError))
+    return "Status printed to console."
+end
+
+notify("Bloodline ESP", "Watchdog active! Crash tracker ready.", 4)
 logDebug("Bloodline ESP time-sliced engine running.", true)
-print("[Bloodline] Merged build active!")
+print("[Bloodline] Watchdog active! Crash tracker ready.")
