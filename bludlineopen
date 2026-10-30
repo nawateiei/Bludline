@@ -1013,25 +1013,12 @@ _G.Bloodline_eventTag    = eventTag
 _G.Bloodline_eventTracer = eventTracer
 _G.Bloodline_running     = true
 
--- Generation token and Server JobId check:
-local INITIAL_JOB_ID = tostring(game.JobId or "")
+-- Generation token check
 local MY_GEN = (_G.Bloodline_gen or 0) + 1
 _G.Bloodline_gen = MY_GEN
 
 local function alive()
-    if _G.Bloodline_running ~= true or _G.Bloodline_gen ~= MY_GEN then
-        return false
-    end
-    -- If server changed (server hop / teleport), terminate loops immediately
-    local currentJob = tostring(game.JobId or "")
-    if INITIAL_JOB_ID ~= "" and currentJob ~= "" and currentJob ~= INITIAL_JOB_ID then
-        local t = os.clock()
-        if not BX.jobBadSince then BX.jobBadSince = t
-        elseif (t - BX.jobBadSince) > 6 then return false end
-    else
-        BX.jobBadSince = nil
-    end
-    return true
+    return _G.Bloodline_running == true and _G.Bloodline_gen == MY_GEN
 end
 
 local function safeRemove(d)
@@ -1474,7 +1461,7 @@ local sliceStart = 0
 local function budgetYield()
     if (os.clock() - sliceStart) > FRAME_BUDGET then
         BX.beatDet = os.clock()
-        task.wait()
+        task.wait(0.015)
         sliceStart = os.clock()
     end
 end
@@ -1983,70 +1970,69 @@ local function processRift(rift)
     end
 end
 
--- Classifies ONE Workspace child. Called through pcall(processObject, obj) so a single
--- bad/despawned instance can never abort the whole pass.
+-- Helper to identify valid items without calling FindFirstChild on random objects
+local function isLikelyItemName(n)
+    if not n or n == "" or n == "Part" or n == "Model" or n == "MeshPart" then return false end
+    if KNOWN_ITEMS[n] or RARE_ITEMS[n] then return true end
+    if string.find(n, "Gem", 1, true) or string.find(n, "Scroll", 1, true)
+        or string.find(n, "Ring", 1, true) or string.find(n, "Fruit", 1, true)
+        or string.find(n, "Schematic", 1, true) or string.find(n, "Eyes", 1, true)
+        or string.find(n, "Bells", 1, true) or n == "Seaweed" or n == "Gloweed"
+        or n == "Glowweed" or n == "Candy" or n == "Extraction Spoon" then
+        return true
+    end
+    return false
+end
+
+-- Classifies ONE Workspace child.
+-- Hardened against freed/despawned instances to prevent C++ memory walker deadlocks in Matcha.
 local function processObject(obj)
-    local cname = obj.ClassName
-    -- Fast reject: thousands of static parts/terrain/camera skipped immediately
+    if not obj then return end
+
+    -- 1. Liveness check: Reading ClassName from a freed instance returns "" or fails
+    local okCls, cname = pcall(function() return obj.ClassName end)
+    if not okCls or type(cname) ~= "string" or #cname == 0 or cname == "" then
+        return -- Freed/corrupted instance, NEVER touch!
+    end
+
+    -- Fast reject non-candidate classes immediately
     if cname == "WedgePart" or cname == "CornerWedgePart"
-        or cname == "TrussPart" or cname == "Terrain" or cname == "Camera" then
+        or cname == "TrussPart" or cname == "Terrain" or cname == "Camera"
+        or cname == "UnionOperation" or cname == "Folder" then
         return
     end
 
-    local objName = tostring(obj.Name or "")
-
-    -- Fast reject: ordinary static parts that are not portals
-    if cname == "Part" then
-        if not (string.find(objName, "Sasuke", 1, true) or string.find(objName, "Portal", 1, true)) then
-            return
-        end
+    -- 2. Liveness check: Reading Name from a freed instance returns "" or fails
+    local okName, objName = pcall(function() return obj.Name end)
+    if not okName or type(objName) ~= "string" or #objName == 0 or objName == "" then
+        return -- Freed/corrupted instance, NEVER touch!
     end
 
-    -- Fast reject: folders other than Debris
-    if cname == "Folder" and objName ~= "Debris" then return end
-
-    -- 0. EVENT RIFTS & PORTALS (Debris or loose in Workspace)
-    if objName == "Debris" and (cname == "Folder" or cname == "Model") then
-        if S.bl_rift_en then
-            if (P_now - BX.debrisAt) >= 2.5 then
-                BX.debrisAt = P_now
-                local found = {}
-                local kids = obj:GetChildren()
-                local n = #kids
-                if n > 250 then n = 250 end
-                for i = 1, n do
-                    local child = kids[i]
-                    local cName = tostring(child.Name or "")
-                    if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
-                        found[#found + 1] = child
-                    end
-                end
-                BX.debrisRifts = found
-            end
-            for i = 1, #BX.debrisRifts do pcall(processRift, BX.debrisRifts[i]) end
-        end
+    -- Fast reject generic static parts and combat slash/hitbox parts
+    if objName == "Part" or STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then
         return
     end
 
+    -- 3. Loose Sasuke Portal / Event Portal in Workspace
     if string.find(objName, "Sasuke", 1, true) or (string.find(objName, "Portal", 1, true) and objName ~= "Portal" and objName ~= "Portal2" and objName ~= "ShukakuPortal") then
-        if cname == "MeshPart" or cname == "Part" or cname == "Model" then
+        if cname == "MeshPart" or cname == "Model" or cname == "Part" then
             pcall(processRift, obj)
             return
         end
     end
 
-    if STATIC_PROP_NAMES[objName] or COMMON_RINGS[objName] then return end
-    if P_playerNames[objName] then return end   -- player characters are handled via Players
+    -- Skip players (handled via Players:GetPlayers())
+    if P_playerNames[objName] then return end
 
-    local addr = obj.Address
-    if not addr then return end
+    local okAddr, addr = pcall(function() return obj.Address end)
+    if not okAddr or not addr then return end
 
     local nu = negUntil[addr]
     if nu and nu > P_now and negName[addr] == objName then return end
 
     local isModel = (cname == "Model")
 
-    -- 0. SPECIAL EVENT: Beast Tamer
+    -- 4. SPECIAL EVENT: Beast Tamer
     if isModel and string.find(string.lower(objName), "beast tamer", 1, true) then
         local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj:FindFirstChildOfClass("BasePart")
         if root then
@@ -2065,10 +2051,11 @@ local function processObject(obj)
         return
     end
 
-    -- 1. CORRUPTED POINT & EVENT CORRUPTION POINT (Pumpkin / PumpkinPoint / CorruptedPoint)
+    -- 5. CORRUPTED POINT & EVENT CORRUPTION POINT (Pumpkin / PumpkinPoint / CorruptedPoint)
     local isCorruptCandidate = isModel and (
-        objName == "CorruptedPoint" or objName == "PumpkinPoint" or string.find(objName, "Pumpkin") ~= nil
-        or (obj:FindFirstChild("Health") and obj:FindFirstChild("Destroyed"))
+        objName == "CorruptedPoint" or objName == "PumpkinPoint"
+        or string.find(objName, "Pumpkin", 1, true) ~= nil
+        or string.find(objName, "Corrupt", 1, true) ~= nil
     )
     if isCorruptCandidate then
         local dest = obj:FindFirstChild("Destroyed")
@@ -2078,7 +2065,7 @@ local function processObject(obj)
             if main then
                 local okP, p = pcall(getPosOf, main)
                 if okP and isValidVec3(p) then
-                    local isPumpkin = (string.find(objName, "Pumpkin") ~= nil)
+                    local isPumpkin = (string.find(objName, "Pumpkin", 1, true) ~= nil)
                     local hpVal = obj:FindFirstChild("Health")
                     local hpNum = (hpVal and hpVal:IsA("ValueBase")) and hpVal.Value or nil
                     P_freshCorrupt[#P_freshCorrupt + 1] = {
@@ -2107,24 +2094,13 @@ local function processObject(obj)
     end
 
     -- Combat VFX / jewelry props
-    if string.find(objName, "Shock") or string.find(objName, "ThinRing") or string.find(objName, "MovingRing") then
+    if string.find(objName, "Shock", 1, true) or string.find(objName, "ThinRing", 1, true) or string.find(objName, "MovingRing", 1, true) or string.find(objName, "Slash", 1, true) then
         ignoreObj(addr, objName, longTTL())
         return
     end
 
-    -- 2. UNIVERSAL PICKUPABLE ITEM DETECTOR
-    local rareInfo = RARE_ITEMS[objName]
-    local isPickupable = (KNOWN_ITEMS[objName] and not COMMON_RINGS[objName])
-        or rareInfo ~= nil
-        or string.find(objName, "Schematic") ~= nil
-        or string.find(objName, " Eyes") ~= nil
-        or obj:FindFirstChild("ItemDetector") ~= nil
-        or obj:FindFirstChild("PickUp") ~= nil
-        or obj:FindFirstChild("Pickupable") ~= nil
-        or obj:FindFirstChildOfClass("ClickDetector") ~= nil
-        or obj:FindFirstChildOfClass("ProximityPrompt") ~= nil
-
-    if isPickupable then
+    -- 6. ITEM DETECTOR (Only runs on objects matching item names/patterns - ZERO blind FindFirstChild calls!)
+    if isLikelyItemName(objName) then
         local lname = objName:lower()
         if COMMON_RINGS[objName] or lname == "ring" or lname == "gold ring" or lname == "golden ring"
             or lname == "gold enclosed ring" or lname == "common ring" or lname == "necklace" then
@@ -2132,10 +2108,11 @@ local function processObject(obj)
             return
         end
 
+        local rareInfo = RARE_ITEMS[objName]
         if not rareInfo then
-            if string.find(objName, "Schematic") then
+            if string.find(objName, "Schematic", 1, true) then
                 rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "★ " .. objName .. " ★", filter = "Schematics" }
-            elseif string.find(objName, " Eyes") then
+            elseif string.find(objName, " Eyes", 1, true) then
                 rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "★ " .. objName .. " ★", filter = "Eyes" }
             end
         end
@@ -2161,12 +2138,12 @@ local function processObject(obj)
                 dist     = (P_myPos - pos).Magnitude,
             }
         else
-            ignoreObj(addr, objName, 1.5)   -- position not resolvable yet, retry soon
+            ignoreObj(addr, objName, 1.5)
         end
         return
     end
 
-    -- 3. MODELS: combat mobs, town NPCs, world bosses
+    -- 7. MODELS: combat mobs, town NPCs, world bosses
     if not isModel or objName:sub(1, 4) == "Tree" or objName:sub(1, 7) == "Caravan" then
         ignoreObj(addr, objName, longTTL())
         return
@@ -2355,7 +2332,7 @@ local function runScanPass()
                 if (t - sliceStart) > SCAN_SLICE_BUDGET then
                     if scanEpoch ~= startEpoch then return end
                     BX.beatCol = os.clock()
-                    task.wait()
+                    task.wait(0.015)
                     if not alive() then return end
                     if scanEpoch ~= startEpoch then return end
                     sliceStart = os.clock()
@@ -2366,6 +2343,13 @@ local function runScanPass()
 
     -- Player teleported while we were scanning: results are for the wrong place, drop them
     if scanEpoch ~= startEpoch then return end
+
+    -- Include event rifts found by the asynchronous micro-sliced Debris worker
+    if S.bl_rift_en and BX.debrisRifts then
+        for i = 1, #BX.debrisRifts do
+            pcall(processRift, BX.debrisRifts[i])
+        end
+    end
 
     -- Sort nearest-first so the small draw pools always get the CLOSEST entities (rare items first)
     table.sort(P_freshMobs, byDist)
@@ -2443,6 +2427,44 @@ BX.startCol = function()
     end)
 end
 BX.startCol()
+
+local debTok = 0
+BX.startDeb = function()
+    debTok = debTok + 1
+    local myTok = debTok
+    task.spawn(function()
+        while alive() and debTok == myTok do
+            BX.beatDeb = os.clock()
+            if S.bl_rift_en then
+                local deb = Workspace:FindFirstChild("Debris")
+                if deb then
+                    local kids = deb:GetChildren()
+                    local found = {}
+                    local sliceStart = os.clock()
+                    for i = 1, #kids do
+                        if not alive() or debTok ~= myTok then return end
+                        local child = kids[i]
+                        if child then
+                            local okN, cName = pcall(function() return child.Name end)
+                            if okN and type(cName) == "string" and #cName > 0 and cName ~= "Part" then
+                                if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
+                                    found[#found + 1] = child
+                                end
+                            end
+                        end
+                        if (os.clock() - sliceStart) > 0.002 then
+                            task.wait(0.015)
+                            sliceStart = os.clock()
+                        end
+                    end
+                    BX.debrisRifts = found
+                end
+            end
+            task.wait(2.5)
+        end
+    end)
+end
+BX.startDeb()
 end -- end of collector scope
 
 -- ============================================================
@@ -4224,7 +4246,8 @@ local function renderFrame()
     local camTeleported = lastCamPos and (camPos - lastCamPos).Magnitude > 75.0
     local charTeleported = lastMyPos and myPos and (myPos - lastMyPos).Magnitude > 75.0
 
-    if camTeleported or charTeleported then
+    if (camTeleported or charTeleported) and (rNow - (BX.lastTeleportFlush or 0)) > 2.0 then
+        BX.lastTeleportFlush = rNow
         scanEpoch = scanEpoch + 1
         pcall(hideAllDrawings)
         trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
@@ -4274,8 +4297,10 @@ local function renderFrame()
     pcall(renderStunTags)
 end
 
-BX.onRender = function()
-    BX.beatRender = os.clock()
+BX.onRender = function(now)
+    now = now or os.clock()
+    BX.beatRender = now
+    rNow = now
     if not alive() then
         if _G.Bloodline_cleanup then
             pcall(_G.Bloodline_cleanup)
@@ -4305,12 +4330,6 @@ BX.onRender = function()
         lastXState = isX
     end
 
-    -- Frame limiter: 15% tolerance below the cap so it follows your display refresh rate
-    local now = os.clock()
-    if (now - lastRenderClock) < (MIN_FRAME_TIME + BX.backoff) then return end
-    lastRenderClock = now
-    rNow = now
-
     _G.Bloodline_renderFrameCount = _G.Bloodline_renderFrameCount + 1
 
     if now - lastSettingsPoll >= SETTINGS_POLL then
@@ -4338,7 +4357,10 @@ end
 
 BX.connectRender = function()
     _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
-        local okR, eR = pcall(BX.onRender)
+        local now = os.clock()
+        if (now - lastRenderClock) < (MIN_FRAME_TIME + BX.backoff) then return end
+        lastRenderClock = now
+        local okR, eR = pcall(BX.onRender, now)
         if not okR then logDebug("Render callback error: " .. tostring(eR)) end
     end)
 end
@@ -4357,6 +4379,10 @@ task.spawn(function()
             BX.beatDet = now
             logDebug("Detector stalled, restarting it.", true)
             pcall(BX.startDet)
+        end
+        if BX.startDeb and (now - (BX.beatDeb or now)) > 15 then
+            BX.beatDeb = now
+            pcall(BX.startDeb)
         end
         if (now - BX.beatRender) > 8 then
             BX.beatRender = now
