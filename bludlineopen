@@ -86,6 +86,7 @@ local COL_BAR_BG  = Color3.fromRGB(20, 20, 20)
 
 local BX = {
     backoff = 0, beatDet = os.clock(), beatCol = os.clock(), beatRender = os.clock(),
+    beatDeb = os.clock(), beatCs = os.clock(),
     reads = 0, dbgAt = 0, pruneAt = 0, jobBadSince = nil, lastClickAt = 0,
     debrisAt = -100, debrisRifts = {},
     vals = {}, posCache = {}, colors = {}, jutsuMemo = {},
@@ -233,6 +234,10 @@ local STATIC_PROP_NAMES = {
     ["ParkourFloor"]          = true,
     ["SoryLantern"]           = true,
     ["WoodPart"]              = true,
+    ["Wood"]                  = true,
+    ["BridgePlanks"]          = true,
+    ["Red Anbu Mask"]         = true,
+    ["Bowl"]                  = true,
     ["Portal2"]               = true,
     ["Electricity Pole"]      = true,
     ["Portal"]                = true,
@@ -1040,25 +1045,36 @@ _G.Bloodline_running     = true
 local MY_GEN = (_G.Bloodline_gen or 0) + 1
 _G.Bloodline_gen = MY_GEN
 
+local lastAliveCheck = 0
+local cachedAlive = true
 local function alive()
     if _G.Bloodline_running ~= true or _G.Bloodline_gen ~= MY_GEN then
         return false
     end
+    local now = os.clock()
+    if (now - lastAliveCheck) < 0.25 then
+        return cachedAlive
+    end
+    lastAliveCheck = now
     local okLP, lp = pcall(function() return Players.LocalPlayer end)
     if not okLP or not lp then
+        cachedAlive = false
         _G.Bloodline_running = false
         return false
     end
     local okPar, par = pcall(function() return lp.Parent end)
     if not okPar or par ~= Players then
+        cachedAlive = false
         _G.Bloodline_running = false
         return false
     end
     local okW, wPar = pcall(function() return Workspace.Parent end)
     if not okW or not wPar then
+        cachedAlive = false
         _G.Bloodline_running = false
         return false
     end
+    cachedAlive = true
     return true
 end
 
@@ -1268,8 +1284,8 @@ end)
 -- ============================================================
 --  TUNING
 -- ============================================================
-local SCAN_INTERVAL     = 0.85   -- pause between full Workspace passes (s)
-local SCAN_SLICE_BUDGET = 0.002  -- max seconds of scan work per frame before yielding
+local SCAN_INTERVAL     = 0.50   -- pause between full Workspace passes (s) (0.5s is fast & responsive with zero lag)
+local SCAN_SLICE_BUDGET = 0.0025 -- max seconds of scan work per frame before yielding (2.5ms = zero game stutter)
 local SETTINGS_POLL     = 0.40   -- how often UI toggles are re-read (s) (0.40s prevents mutex contention)
 -- MAX_RENDER_FPS and MIN_FRAME_TIME are configured dynamically via settings above
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
@@ -2090,7 +2106,11 @@ local function isLikelyItemName(n)
         or string.find(n, "Ring", 1, true) or string.find(n, "Fruit", 1, true)
         or string.find(n, "Schematic", 1, true) or string.find(n, "Eyes", 1, true)
         or string.find(n, "Bells", 1, true) or n == "Seaweed" or n == "Gloweed"
-        or n == "Glowweed" or n == "Candy" or n == "Extraction Spoon" then
+        or n == "Glowweed" or n == "Candy" or n == "Extraction Spoon"
+        or string.find(n, "Armor", 1, true)
+        or string.find(n, "Sword", 1, true) or string.find(n, "Katana", 1, true)
+        or string.find(n, "Blade", 1, true) or string.find(n, "Potion", 1, true)
+        or string.find(n, "Drop", 1, true) then
         return true
     end
     return false
@@ -2131,6 +2151,11 @@ local function processObject(obj)
             pcall(processRift, obj)
             return
         end
+    end
+
+    -- Fast reject all remaining plain Part instances (not portals, not items)
+    if cname == "Part" and not isLikelyItemName(objName) then
+        return
     end
 
     -- Skip players (handled via Players:GetPlayers())
@@ -2213,6 +2238,13 @@ local function processObject(obj)
 
     -- 6. ITEM DETECTOR (Only runs on objects matching item names/patterns - ZERO blind FindFirstChild calls!)
     if isLikelyItemName(objName) then
+        -- Fast reject shop items / cosmetic display models (vendor stock has a 'Buyable' child)
+        local okB, buyable = pcall(function() return obj:FindFirstChild("Buyable") end)
+        if okB and buyable then
+            ignoreObj(addr, objName, longTTL())
+            return
+        end
+
         local lname = objName:lower()
         if COMMON_RINGS[objName] or lname == "ring" or lname == "gold ring" or lname == "golden ring"
             or lname == "gold enclosed ring" or lname == "common ring" or lname == "necklace" then
@@ -2241,6 +2273,7 @@ local function processObject(obj)
                 end
             end
             P_freshItems[#P_freshItems + 1] = {
+                obj      = obj,
                 name     = objName,
                 display  = rareInfo and rareInfo.label or objName,
                 pos      = pos,
@@ -2340,9 +2373,14 @@ local function scanChakra()
                 local csVal = pFolder and pFolder:FindFirstChild("Chakra Sense")
                 if csVal then
                     local pName = pFolder.Name
-                    local char = P_playerChars[pName]
+                    local char = (P_playerChars and P_playerChars[pName])
+                    if not char then
+                        local pObj = Players:FindFirstChild(pName)
+                        char = pObj and pObj.Character
+                    end
                     local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
-                    local isCasting = (torso and torso:FindFirstChild("ChakraSense") ~= nil) or false
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    local isCasting = (char and (char:FindFirstChild("ChakraSense") or (torso and torso:FindFirstChild("ChakraSense")) or (root and root:FindFirstChild("ChakraSense"))) ~= nil) or false
 
                     freshChakra[#freshChakra + 1] = { name = pName, isCasting = isCasting }
 
@@ -2369,7 +2407,8 @@ local function scanChakra()
     end
 
     for pName in pairs(notifiedChakraUsers) do
-        if not P_playerNames[pName] then
+        local stillHere = (P_playerNames and P_playerNames[pName]) or (Players:FindFirstChild(pName) ~= nil)
+        if not stillHere then
             notifiedChakraUsers[pName] = nil
             lastChakraCastState[pName] = nil
         end
@@ -2447,7 +2486,7 @@ local function runScanPass()
                 if (t - sliceStart) > SCAN_SLICE_BUDGET then
                     if scanEpoch ~= startEpoch then return end
                     BX.beatCol = os.clock()
-                    task.wait(0.015)
+                    task.wait(0.005)
                     if not alive() then return end
                     if scanEpoch ~= startEpoch then return end
                     sliceStart = os.clock()
@@ -2536,8 +2575,7 @@ BX.startCol = function()
             local t0 = os.clock()
             local ok, err = pcall(runScanPass)
             if not ok then logDebug("Collector error: " .. tostring(err)) end
-            local took = os.clock() - t0
-            task.wait(max(SCAN_INTERVAL, took) + BX.backoff * 10)
+            task.wait(SCAN_INTERVAL + BX.backoff * 2)
         end
     end)
 end
@@ -2568,7 +2606,7 @@ BX.startDeb = function()
                             end
                         end
                         if (os.clock() - sliceStart) > 0.002 then
-                            task.wait(0.015)
+                            task.wait(0.008)
                             if not alive() or debTok ~= myTok then return end
                             sliceStart = os.clock()
                         end
@@ -2578,11 +2616,28 @@ BX.startDeb = function()
                     end
                 end
             end
-            task.wait(2.5)
+            task.wait(0.50)
         end
     end)
 end
 BX.startDeb()
+
+local csTok = 0
+BX.startCs = function()
+    csTok = csTok + 1
+    local myTok = csTok
+    task.spawn(function()
+        while alive() and csTok == myTok do
+            BX.beatCs = os.clock()
+            if S.bl_cs_en and alive() then
+                local ok, err = pcall(scanChakra)
+                if not ok then cdFolderCache = nil end
+            end
+            task.wait(0.25)
+        end
+    end)
+end
+BX.startCs()
 end -- end of collector scope
 
 -- ============================================================
@@ -2699,6 +2754,13 @@ end
 
 -- ---------------- COMBAT MOBS ----------------
 local function drawMobEntity(e, m)
+    local root, hum = m.root, m.hum
+    if not root or not hum then return false end
+    local okPar, par = pcall(function() return root.Parent end)
+    if not okPar or not par then return false end
+    local okPar2, gpar = pcall(function() return par.Parent end)
+    if par ~= Workspace and gpar ~= Workspace then return false end
+
     local ok, rPos, hp = pcall(readMob, m)
     if not ok or not isValidVec3(rPos) or not isValidNum(hp) or hp <= 0 then return false end
 
@@ -2783,6 +2845,11 @@ end
 
 -- ---------------- CORRUPTION POINTS ----------------
 local function drawCorruptEntity(e, c)
+    local mod = c.model
+    if mod then
+        local okP, par = pcall(function() return mod.Parent end)
+        if not okP or par ~= Workspace then return false end
+    end
     if not c or not c.pos or not isValidVec3(c.pos) then return false end
     local pos = c.pos
     local dist = (rCamPos - pos).Magnitude
@@ -2868,6 +2935,11 @@ end
 
 -- ---------------- EVENT RIFTS ----------------
 local function drawRiftEntity(e, r)
+    local inst = r.inst
+    if inst then
+        local okP, par = pcall(function() return inst.Parent end)
+        if not okP or not par then return false end
+    end
     if not r or not r.pos or not isValidVec3(r.pos) then return false end
     local pos = r.pos
     local dist = (rCamPos - pos).Magnitude
@@ -3010,6 +3082,11 @@ end
 
 -- ---------------- ITEMS ----------------
 local function drawItemEntity(e, it)
+    local obj = it.obj
+    if obj then
+        local okP, par = pcall(function() return obj.Parent end)
+        if not okP or par ~= Workspace then return false end
+    end
     if not it or not it.pos or not isValidVec3(it.pos) then return false end
     local pos = it.pos
     local dist = (rCamPos - pos).Magnitude
@@ -3106,6 +3183,10 @@ end
 -- ---------------- BEAST TAMER EVENT ----------------
 local evTextAt, evLastText = 0, ""
 local function drawBeastTamer(bt)
+    if not bt or not bt.model then return false end
+    local okPar, par = pcall(function() return bt.model.Parent end)
+    if not okPar or par ~= Workspace then return false end
+
     local okP, pos = pcall(getPosOf, bt.root)
     if not okP or not isValidVec3(pos) then pos = bt.pos end
     if not isValidVec3(pos) then return false end
@@ -4461,14 +4542,14 @@ BX.onRender = function(now)
         logDebug("RenderStepped error: " .. tostring(err))
     end
 
-    -- load shedding: if a frame was expensive, back off so slow PCs never stall
+    -- load shedding: adaptive backoff that protects slow PCs from graphics crashes while keeping fast PCs at 90 FPS
     local cost = os.clock() - now
-    if cost > 0.006 then
-        local b = cost * 2
-        if b > 0.12 then b = 0.12 end
+    if cost > 0.008 then
+        local b = (cost - 0.008) * 1.5
+        if b > 0.025 then b = 0.025 end
         if b > BX.backoff then BX.backoff = b end
     else
-        BX.backoff = BX.backoff * 0.9
+        BX.backoff = BX.backoff * 0.85
         if BX.backoff < 0.0005 then BX.backoff = 0 end
     end
 end
@@ -4501,6 +4582,10 @@ task.spawn(function()
         if BX.startDeb and (now - (BX.beatDeb or now)) > 15 then
             BX.beatDeb = now
             pcall(BX.startDeb)
+        end
+        if BX.startCs and (now - (BX.beatCs or now)) > 15 then
+            BX.beatCs = now
+            pcall(BX.startCs)
         end
         if (now - BX.beatRender) > 8 then
             BX.beatRender = now
