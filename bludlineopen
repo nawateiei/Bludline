@@ -20,12 +20,19 @@ if _G.Bloodline_JDUI then
     pcall(function() _G.Bloodline_JDUI:Destroy() end)
     _G.Bloodline_JDUI = nil
 end
+local rawOldJDUI = rawget(_G, "JDUI")
+if rawOldJDUI and type(rawOldJDUI) == "table" and rawOldJDUI.Destroy then
+    pcall(function() rawOldJDUI:Destroy() end)
+    pcall(rawset, _G, "JDUI", nil)
+end
 
--- Gracefully wait until the game world, player, and camera are fully loaded (essential on server hop / re-exec)
-if pcall(function() return game:IsLoaded() end) then
-    while not game:IsLoaded() do
-        task.wait(0.2)
-    end
+-- Gracefully wait until the game world, player, and camera are loaded (with safety timeout for server hop / re-exec)
+local isLoadedWait = 0
+while isLoadedWait < 30 do -- max 6 seconds
+    local ok, loaded = pcall(function() return game:IsLoaded() end)
+    if ok and loaded then break end
+    task.wait(0.2)
+    isLoadedWait = isLoadedWait + 1
 end
 
 local RunService       = game:GetService("RunService")
@@ -34,8 +41,11 @@ local Workspace        = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 
 local lpWait = 0
-while (not Players.LocalPlayer or not Workspace.CurrentCamera) and lpWait < 40 do
-    task.wait(0.1)
+while lpWait < 40 do -- max 8 seconds
+    local okLP, lp = pcall(function() return Players.LocalPlayer end)
+    local okCam, cam = pcall(function() return Workspace.CurrentCamera end)
+    if okLP and lp and okCam and cam then break end
+    task.wait(0.2)
     lpWait = lpWait + 1
 end
 
@@ -462,7 +472,20 @@ if _G.Bloodline_JDUI then
 end
 
 local ok_jdui, res_jdui = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/jdev-studio/jdui/refs/heads/main/JDUI"))() or _G.JDUI
+    local src = nil
+    if isfile and isfile("bloodline_jdui_cache.lua") and readfile then
+        local okF, content = pcall(readfile, "bloodline_jdui_cache.lua")
+        if okF and type(content) == "string" and #content > 1000 then
+            src = content
+        end
+    end
+    if not src then
+        src = game:HttpGet("https://raw.githubusercontent.com/jdev-studio/jdui/refs/heads/main/JDUI")
+        if writefile and src and #src > 1000 then
+            pcall(writefile, "bloodline_jdui_cache.lua", src)
+        end
+    end
+    return loadstring(src)() or _G.JDUI
 end)
 
 if ok_jdui and res_jdui then
@@ -1018,7 +1041,25 @@ local MY_GEN = (_G.Bloodline_gen or 0) + 1
 _G.Bloodline_gen = MY_GEN
 
 local function alive()
-    return _G.Bloodline_running == true and _G.Bloodline_gen == MY_GEN
+    if _G.Bloodline_running ~= true or _G.Bloodline_gen ~= MY_GEN then
+        return false
+    end
+    local okLP, lp = pcall(function() return Players.LocalPlayer end)
+    if not okLP or not lp then
+        _G.Bloodline_running = false
+        return false
+    end
+    local okPar, par = pcall(function() return lp.Parent end)
+    if not okPar or par ~= Players then
+        _G.Bloodline_running = false
+        return false
+    end
+    local okW, wPar = pcall(function() return Workspace.Parent end)
+    if not okW or not wPar then
+        _G.Bloodline_running = false
+        return false
+    end
+    return true
 end
 
 local function safeRemove(d)
@@ -1029,7 +1070,7 @@ local function safeRemove(d)
 end
 
 -- ============================================================
---  GLOBAL CLEANUP
+--  GLOBAL CLEANUP & TELEPORT / SERVER HOP HANDLERS
 -- ============================================================
 _G.Bloodline_cleanup = function()
     _G.Bloodline_running = false
@@ -1043,6 +1084,21 @@ _G.Bloodline_cleanup = function()
     if _G.Bloodline_inputConn then
         pcall(function() _G.Bloodline_inputConn:Disconnect() end)
         _G.Bloodline_inputConn = nil
+    end
+
+    if _G.Bloodline_teleportConn then
+        pcall(function() _G.Bloodline_teleportConn:Disconnect() end)
+        _G.Bloodline_teleportConn = nil
+    end
+
+    if _G.Bloodline_ancConn then
+        pcall(function() _G.Bloodline_ancConn:Disconnect() end)
+        _G.Bloodline_ancConn = nil
+    end
+
+    if _G.Bloodline_guiConn then
+        pcall(function() _G.Bloodline_guiConn:Disconnect() end)
+        _G.Bloodline_guiConn = nil
     end
 
     if _G.Bloodline_csHudTitle then
@@ -1153,7 +1209,61 @@ _G.Bloodline_cleanup = function()
         pcall(function() _G.Bloodline_JDUI:Destroy() end)
         _G.Bloodline_JDUI = nil
     end
+    local rawJ = rawget(_G, "JDUI")
+    if rawJ and type(rawJ) == "table" and rawJ.Destroy then
+        pcall(function() rawJ:Destroy() end)
+        pcall(rawset, _G, "JDUI", nil)
+    end
 end
+
+-- Emergency shutdown on teleport / server hop / world destroy
+local function emergencyShutdown(reason)
+    if _G.Bloodline_running then
+        _G.Bloodline_running = false
+        _G.Bloodline_gen = (_G.Bloodline_gen or 0) + 1
+        if _G.Bloodline_cleanup then
+            pcall(_G.Bloodline_cleanup)
+            _G.Bloodline_cleanup = nil
+        end
+    end
+end
+
+-- 1. Fast Travel / Teleport listener
+pcall(function()
+    local lp = Players.LocalPlayer
+    if lp and lp.OnTeleport then
+        _G.Bloodline_teleportConn = lp.OnTeleport:Connect(function(state)
+            emergencyShutdown("LocalPlayer.OnTeleport: " .. tostring(state))
+        end)
+    end
+end)
+
+-- 2. Ancestry listener (unparent on server change)
+pcall(function()
+    local lp = Players.LocalPlayer
+    if lp then
+        _G.Bloodline_ancConn = lp.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                emergencyShutdown("LocalPlayer unparented")
+            end
+        end)
+    end
+end)
+
+-- 3. Game shutdown / server disconnect
+pcall(function()
+    game:BindToClose(function()
+        emergencyShutdown("game:BindToClose")
+    end)
+end)
+
+-- 4. Disconnect screen listener
+pcall(function()
+    local GuiService = game:GetService("GuiService")
+    _G.Bloodline_guiConn = GuiService.ErrorMessageChanged:Connect(function()
+        emergencyShutdown("GuiService error")
+    end)
+end)
 
 -- ============================================================
 --  TUNING
@@ -1829,8 +1939,10 @@ task.spawn(function()
     while alive() and detTok == myTok do
         BX.beatDet = os.clock()
         sliceStart = os.clock()
-        local ok, err = pcall(updateActiveCasts)
-        if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
+        if alive() then
+            local ok, err = pcall(updateActiveCasts)
+            if not ok then logDebug("Jutsu detector error: " .. tostring(err)) end
+        end
 
         local delay = CYCLE_OFF
         if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en then
@@ -2279,6 +2391,7 @@ local function scanChakra()
 end
 
 local function runScanPass()
+    if not alive() then return end
     _G.Bloodline_scanPassCount = (_G.Bloodline_scanPassCount or 0) + 1
     local startEpoch = scanEpoch
     refreshSettings()
@@ -2313,12 +2426,14 @@ local function runScanPass()
         end
     end
 
+    if not alive() then return end
+
     -- Time-sliced Workspace walk
     local children = Workspace:GetChildren()
     local total = #children
     local sliceStart = os.clock()
     for i = 1, total do
-        if scanEpoch ~= startEpoch then return end
+        if not alive() or scanEpoch ~= startEpoch then return end
         local obj = children[i]
         if obj then
             local okPar, par = pcall(function() return obj.Parent end)
@@ -2435,16 +2550,16 @@ BX.startDeb = function()
     task.spawn(function()
         while alive() and debTok == myTok do
             BX.beatDeb = os.clock()
-            if S.bl_rift_en then
+            if S.bl_rift_en and alive() then
                 local deb = Workspace:FindFirstChild("Debris")
-                if deb then
+                if deb and alive() then
                     local kids = deb:GetChildren()
                     local found = {}
                     local sliceStart = os.clock()
                     for i = 1, #kids do
                         if not alive() or debTok ~= myTok then return end
                         local child = kids[i]
-                        if child then
+                        if child and alive() then
                             local okN, cName = pcall(function() return child.Name end)
                             if okN and type(cName) == "string" and #cName > 0 and cName ~= "Part" then
                                 if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
@@ -2454,10 +2569,13 @@ BX.startDeb = function()
                         end
                         if (os.clock() - sliceStart) > 0.002 then
                             task.wait(0.015)
+                            if not alive() or debTok ~= myTok then return end
                             sliceStart = os.clock()
                         end
                     end
-                    BX.debrisRifts = found
+                    if alive() then
+                        BX.debrisRifts = found
+                    end
                 end
             end
             task.wait(2.5)
