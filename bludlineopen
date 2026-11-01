@@ -2450,17 +2450,25 @@ local function processObject(obj)
     end
 end
 
--- Chakra Sense scanner
+-- Chakra Sense scanner (Global & distance-independent)
 local cdFolderCache = nil
+local settingsFolderCache = nil
+local lastChakraCdVal = {}
+local chakraCastExpiresAt = {}
 local function scanChakra()
     local freshChakra = {}
     if S.bl_cs_en then
         if not cdFolderCache then
             cdFolderCache = game:GetService("ReplicatedStorage"):FindFirstChild("Cooldowns")
         end
+        if not settingsFolderCache then
+            settingsFolderCache = game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+        end
         local cdFolder = cdFolderCache
+        local settingsFolder = settingsFolderCache
         if cdFolder then
             local cdList = cdFolder:GetChildren()
+            local now = os.clock()
             for i = 1, #cdList do
                 local pFolder = cdList[i]
                 local csVal = pFolder and pFolder:FindFirstChild("Chakra Sense")
@@ -2472,10 +2480,51 @@ local function scanChakra()
                         char = pObj and pObj.Character
                     end
                     local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    local isCasting = (char and (char:FindFirstChild("ChakraSense") or (torso and torso:FindFirstChild("ChakraSense")) or (root and root:FindFirstChild("ChakraSense"))) ~= nil) or false
+                    local root = char and (char:FindFirstChild("HumanoidRootPart") or torso)
 
-                    freshChakra[#freshChakra + 1] = { name = pName, isCasting = isCasting }
+                    -- 1. Server-wide Global Detection via ReplicatedStorage.Settings (Works at ANY distance)
+                    local isCasting = false
+                    local pSettings = settingsFolder and settingsFolder:FindFirstChild(pName)
+                    local currSkill = pSettings and pSettings:FindFirstChild("CurrentSkill")
+                    if currSkill and tostring(currSkill.Value):lower():find("chakra sense") then
+                        isCasting = true
+                        chakraCastExpiresAt[pName] = now + 4.0
+                    end
+
+                    -- 2. Global Cooldown Timestamp Shift Trigger
+                    local cdNum = tonumber(csVal.Value) or 0
+                    local prevCd = lastChakraCdVal[pName]
+                    if prevCd and cdNum > (prevCd + 0.5) then
+                        isCasting = true
+                        chakraCastExpiresAt[pName] = now + 4.0
+                    end
+                    lastChakraCdVal[pName] = cdNum
+
+                    if not isCasting and (chakraCastExpiresAt[pName] and now < chakraCastExpiresAt[pName]) then
+                        isCasting = true
+                    end
+
+                    -- 3. Visual 3D Fallback if character is loaded nearby
+                    if not isCasting and char then
+                        if char:FindFirstChild("ChakraSense") or (torso and torso:FindFirstChild("ChakraSense")) or (root and root:FindFirstChild("ChakraSense")) then
+                            isCasting = true
+                        end
+                    end
+
+                    -- Calculate distance if character root is available in Workspace
+                    local distStuds = nil
+                    if P_myPos and root then
+                        local okP, rp = pcall(getPosOf, root)
+                        if okP and isValidVec3(rp) then
+                            distStuds = math.floor((P_myPos - rp).Magnitude)
+                        end
+                    end
+
+                    freshChakra[#freshChakra + 1] = {
+                        name = pName,
+                        isCasting = isCasting,
+                        dist = distStuds,
+                    }
 
                     if not notifiedChakraUsers[pName] then
                         notifiedChakraUsers[pName] = true
@@ -2488,7 +2537,8 @@ local function scanChakra()
                         if not lastChakraCastState[pName] then
                             lastChakraCastState[pName] = true
                             if S.bl_cs_use_notify then
-                                notify("CHAKRA SENSE ACTIVE!", string.format("%s is using Chakra Sense right now!", pName), 6)
+                                local distInfo = distStuds and string.format(" (%d studs away)", distStuds) or " (Far Away / Map-Wide)"
+                                notify("CHAKRA SENSE ACTIVE!", string.format("%s is using Chakra Sense right now%s!", pName, distInfo), 6)
                             end
                         end
                     else
@@ -2504,6 +2554,8 @@ local function scanChakra()
         if not stillHere then
             notifiedChakraUsers[pName] = nil
             lastChakraCastState[pName] = nil
+            lastChakraCdVal[pName] = nil
+            chakraCastExpiresAt[pName] = nil
         end
     end
 
@@ -2514,7 +2566,8 @@ local function scanChakra()
         local lines = {}
         for i = 1, n do
             local u = freshChakra[i]
-            lines[i] = string.format(" %s: %s", u.name, u.isCasting and "[CASTING NOW!]" or "[Idle]")
+            local dStr = u.dist and string.format(" [%dm]", u.dist) or " [Far Away]"
+            lines[i] = string.format(" %s: %s%s", u.name, u.isCasting and "[CASTING NOW!]" or "[Idle]", dStr)
         end
         text  = table.concat(lines, "\n")
         title = string.format("[Chakra Sense Radar (%d)]", n)
