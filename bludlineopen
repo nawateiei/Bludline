@@ -55,21 +55,30 @@ while lpWait < 40 do -- max 8 seconds
 end
 
 -- ============================================================
---  CRASH TRACER & DIAGNOSTIC WATCHDOG ENGINE
+--  CRASH TRACER & DIAGNOSTIC ENGINE (Rate-limited, Non-blocking)
 -- ============================================================
 local CrashTracker = {
     history = {},
-    maxHistory = 60,
+    maxHistory = 30,
     startTime = os.clock(),
 }
 _G.Bloodline_CrashHistory = CrashTracker.history
 
+local lastCrashLogAt = {}
+local lastDiskWriteAt = 0
 local function logCrash(source, err, isFatal)
-    local errStr = tostring(err)
-    local trace = debug.traceback(errStr, 2)
     local now = os.clock()
-    local dateStr = os.date("%H:%M:%S")
+    local errStr = tostring(err)
+    local errKey = tostring(source) .. ":" .. errStr:sub(1, 40)
 
+    -- STRICT RATE-LIMIT: Never spam or freeze the Lua VM with repeating errors
+    if lastCrashLogAt[errKey] and (now - lastCrashLogAt[errKey]) < 3.0 then
+        return
+    end
+    lastCrashLogAt[errKey] = now
+
+    local trace = debug.traceback(errStr, 2)
+    local dateStr = os.date("%H:%M:%S")
     local fileLine = errStr:match(":(%d+):") or trace:match(":(%d+):") or "?"
 
     local entry = {
@@ -91,17 +100,20 @@ local function logCrash(source, err, isFatal)
     local logBody = string.format("%s\nERROR: %s\nSTACK TRACE:\n%s\n--------------------------------------------------\n", logHeader, errStr, trace)
 
     warn(logHeader .. ": " .. errStr)
-    print(logBody)
 
-    pcall(function()
-        if appendfile then
-            appendfile("bloodline_debug.txt", logBody)
-        elseif writefile then
-            writefile("bloodline_debug.txt", logBody)
-        end
-    end)
+    -- Throttled disk writes: max once every 4 seconds, never lock up disk I/O
+    if (now - lastDiskWriteAt) >= 4.0 then
+        lastDiskWriteAt = now
+        pcall(function()
+            if appendfile then
+                appendfile("bloodline_debug.txt", logBody)
+            elseif writefile then
+                writefile("bloodline_debug.txt", logBody)
+            end
+        end)
+    end
 
-    if notify then
+    if notify and isFatal then
         pcall(notify, "WATCHDOG: " .. source, string.format("Line %s: %s", fileLine, errStr:sub(1, 75)), 8)
     end
 end
@@ -1194,6 +1206,11 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_guiConn = nil
     end
 
+    if _G.Bloodline_debAddConn then
+        pcall(function() _G.Bloodline_debAddConn:Disconnect() end)
+        _G.Bloodline_debAddConn = nil
+    end
+
     if _G.Bloodline_csHudTitle then
         safeRemove(_G.Bloodline_csHudTitle)
         _G.Bloodline_csHudTitle = nil
@@ -1363,11 +1380,11 @@ pcall(function()
 end)
 
 -- ============================================================
---  TUNING
+--  TUNING (Balanced for high performance on all hardware)
 -- ============================================================
-local SCAN_INTERVAL     = 0.50   -- pause between full Workspace passes (s) (0.5s is fast & responsive with zero lag)
-local SCAN_SLICE_BUDGET = 0.0025 -- max seconds of scan work per frame before yielding (2.5ms = zero game stutter)
-local SETTINGS_POLL     = 0.40   -- how often UI toggles are re-read (s) (0.40s prevents mutex contention)
+local SCAN_INTERVAL     = 0.75   -- pause between full Workspace passes (s) (0.75s balances smooth tracking with low CPU on all PCs)
+local SCAN_SLICE_BUDGET = 0.0020 -- max seconds of scan work per frame before yielding (2.0ms = zero game stutter)
+local SETTINGS_POLL     = 0.50   -- how often UI toggles are re-read (s) (0.50s prevents mutex contention)
 -- MAX_RENDER_FPS and MIN_FRAME_TIME are configured dynamically via settings above
 local TEXT_INTERVAL     = 0.12   -- min seconds between text re-layouts of one label
 local NEG_TTL_BASE      = 35.0   -- how long "not interesting" objects are skipped (s)
@@ -2040,7 +2057,7 @@ BX.startDet = function()
     detTok = detTok + 1
     local myTok = detTok
     task.spawn(function()
-        while _G.Bloodline_running and detTok == myTok do
+        while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN and detTok == myTok do
             BX.beatDet = os.clock()
             sliceStart = os.clock()
             if alive() then
@@ -2152,10 +2169,21 @@ local function addWorldBoss(obj, objName, addr)
     end
 end
 
+local function isEventPortal(name)
+    if type(name) ~= "string" or #name == 0 or name == "Part" or name == "Portal" or name == "Portal2" or name == "ShukakuPortal" then
+        return false
+    end
+    local l = name:lower()
+    if l:find("unstable rift") then return false end
+    if l:find("sasuke") or l:find("infernal") or l:find("vampiric") then return true end
+    if l:find("portal") or l:find("rift") then return true end
+    return false
+end
+
 local function processRift(rift)
     if not rift then return end
     local rName = tostring(rift.Name or "")
-    if rName == "Unstable Rift" or string.find(rName, "Unstable Rift") then return end
+    if not isEventPortal(rName) then return end
 
     local p = nil
     if rift:IsA("BasePart") then
@@ -2170,9 +2198,11 @@ local function processRift(rift)
     end
     if not p or not isValidVec3(p) then return end
 
-    local dist = (P_myPos - p).Magnitude
+    local myPos = P_myPos or lastMyPos or Vector3.new()
+    local dist = (myPos - p).Magnitude
     local addr = rift.Address or tostring(p)
-    local isSasuke = (string.find(rName, "Sasuke") ~= nil or string.find(rName, "Portal") ~= nil)
+    local lName = rName:lower()
+    local isSasuke = (lName:find("sasuke") ~= nil or lName:find("infernal") ~= nil or lName:find("vampiric") ~= nil)
 
     P_freshRifts[#P_freshRifts + 1] = {
         inst = rift,
@@ -2186,7 +2216,7 @@ local function processRift(rift)
     if not notifiedRifts[addr] then
         notifiedRifts[addr] = true
         if S.bl_rift_notify then
-            notify("HALLOWEEN EVENT ALERT!", string.format("%s spawned! [%dm away]", rName, floor(dist)), 10)
+            notify("EVENT PORTAL DETECTED!", string.format("%s spawned! [%dm away]", rName, floor(dist)), 10)
         end
     end
 end
@@ -2223,7 +2253,22 @@ local function processObject(obj)
     -- Fast reject non-candidate classes immediately
     if cname == "WedgePart" or cname == "CornerWedgePart"
         or cname == "TrussPart" or cname == "Terrain" or cname == "Camera"
-        or cname == "UnionOperation" or cname == "Folder" then
+        or cname == "UnionOperation" then
+        return
+    end
+
+    -- Event folders (like Workspace.Rifts)
+    if cname == "Folder" then
+        local fName = tostring(obj.Name or "")
+        if fName == "Rifts" or fName:lower():find("portal") or fName:lower():find("event") then
+            local subKids = obj:GetChildren()
+            for j = 1, #subKids do
+                local sub = subKids[j]
+                if sub and isEventPortal(sub.Name) then
+                    pcall(processRift, sub)
+                end
+            end
+        end
         return
     end
 
@@ -2239,11 +2284,9 @@ local function processObject(obj)
     end
 
     -- 3. Loose Sasuke Portal / Event Portal in Workspace
-    if string.find(objName, "Sasuke", 1, true) or (string.find(objName, "Portal", 1, true) and objName ~= "Portal" and objName ~= "Portal2" and objName ~= "ShukakuPortal") then
-        if cname == "MeshPart" or cname == "Model" or cname == "Part" then
-            pcall(processRift, obj)
-            return
-        end
+    if isEventPortal(objName) then
+        pcall(processRift, obj)
+        return
     end
 
     -- Fast reject all remaining plain Part instances (not portals, not items)
@@ -2559,6 +2602,36 @@ local function scanChakra()
         end
     end
 
+    -- Also scan Settings for any player actively channeling Chakra Sense even if not in Cooldowns
+    if settingsFolderCache then
+        local setList = settingsFolderCache:GetChildren()
+        for i = 1, #setList do
+            local pFolder = setList[i]
+            local pName = pFolder.Name
+            local alreadyAdded = false
+            for j = 1, #freshChakra do
+                if freshChakra[j].name == pName then alreadyAdded = true; break end
+            end
+            if not alreadyAdded then
+                local currSkill = pFolder:FindFirstChild("CurrentSkill")
+                if currSkill and tostring(currSkill.Value):lower():find("chakra sense") then
+                    local char = (P_playerChars and P_playerChars[pName]) or (Players:FindFirstChild(pName) and Players:FindFirstChild(pName).Character)
+                    local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+                    local distStuds = nil
+                    if P_myPos and root then
+                        local okP, rp = pcall(getPosOf, root)
+                        if okP and isValidVec3(rp) then distStuds = math.floor((P_myPos - rp).Magnitude) end
+                    end
+                    freshChakra[#freshChakra + 1] = {
+                        name = pName,
+                        isCasting = true,
+                        dist = distStuds,
+                    }
+                end
+            end
+        end
+    end
+
     -- Build Chakra Sense HUD strings once per pass
     local n = #freshChakra
     local text, title = "", ""
@@ -2716,7 +2789,7 @@ BX.startCol = function()
     colTok = colTok + 1
     local myTok = colTok
     task.spawn(function()
-        while _G.Bloodline_running and colTok == myTok do
+        while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN and colTok == myTok do
             BX.beatCol = os.clock()
             if alive() then
                 local ok, err = xpcall(runScanPass, function(e)
@@ -2737,8 +2810,30 @@ local debTok = 0
 BX.startDeb = function()
     debTok = debTok + 1
     local myTok = debTok
+
+    -- Instant 0ms ChildAdded listener for event portals spawning in Debris
+    pcall(function()
+        local deb = Workspace:FindFirstChild("Debris")
+        if deb then
+            if _G.Bloodline_debAddConn then
+                pcall(function() _G.Bloodline_debAddConn:Disconnect() end)
+            end
+            _G.Bloodline_debAddConn = deb.ChildAdded:Connect(function(child)
+                if child and alive() then
+                    local okN, cName = pcall(function() return child.Name end)
+                    if okN and isEventPortal(cName) then
+                        table.insert(BX.debrisRifts, child)
+                        if S.bl_rift_notify then
+                            notify("PORTAL DETECTED!", string.format("%s spawned!", cName), 10)
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+
     task.spawn(function()
-        while _G.Bloodline_running and debTok == myTok do
+        while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN and debTok == myTok do
             BX.beatDeb = os.clock()
             if S.bl_rift_en and alive() then
                 local ok, err = xpcall(function()
@@ -2746,22 +2841,13 @@ BX.startDeb = function()
                     if deb and alive() then
                         local kids = deb:GetChildren()
                         local found = {}
-                        local sliceStart = os.clock()
                         for i = 1, #kids do
-                            if not alive() or debTok ~= myTok then return end
                             local child = kids[i]
                             if child and alive() then
                                 local okN, cName = pcall(function() return child.Name end)
-                                if okN and type(cName) == "string" and #cName > 0 and cName ~= "Part" then
-                                    if string.find(cName, "Sasuke", 1, true) or (string.find(cName, "Portal", 1, true) and cName ~= "Portal" and cName ~= "Portal2" and cName ~= "ShukakuPortal") then
-                                        found[#found + 1] = child
-                                    end
+                                if okN and isEventPortal(cName) then
+                                    found[#found + 1] = child
                                 end
-                            end
-                            if (os.clock() - sliceStart) > 0.002 then
-                                task.wait(0.008)
-                                if not alive() or debTok ~= myTok then return end
-                                sliceStart = os.clock()
                             end
                         end
                         if alive() then
@@ -2776,7 +2862,7 @@ BX.startDeb = function()
                     task.wait(1.0)
                 end
             end
-            task.wait(0.50)
+            task.wait(1.5)
         end
     end)
 end
@@ -2787,7 +2873,7 @@ BX.startCs = function()
     csTok = csTok + 1
     local myTok = csTok
     task.spawn(function()
-        while _G.Bloodline_running and csTok == myTok do
+        while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN and csTok == myTok do
             BX.beatCs = os.clock()
             if S.bl_cs_en and alive() then
                 local ok, err = xpcall(scanChakra, function(e)
@@ -3126,6 +3212,10 @@ local function drawRiftEntity(e, r)
 
     local riftCol = S.bl_rift_col or BX.RGB(255, 60, 20)
     local tagCol  = BX.RGB(255, 195, 60)
+    if r.isSasuke then
+        riftCol = BX.RGB(255, 35, 15)   -- Fiery Crimson / Blood Red
+        tagCol  = BX.RGB(255, 215, 0)   -- Bright Gold Text
+    end
 
     if S.bl_rift_box then
         place(e, "box", boxX, boxY)
@@ -3141,7 +3231,9 @@ local function drawRiftEntity(e, r)
         if e.owner ~= r then e.owner = r; e.textAt = 0 end
         if rNow - e.textAt >= TEXT_INTERVAL then
             e.textAt = rNow
-            local label = showName and ("🎃 " .. (r.name or "Event Portal") .. " 🎃") or ""
+            local prefix = r.isSasuke and "🔥 " or "🎃 "
+            local suffix = r.isSasuke and " 🔥" or " 🎃"
+            local label = showName and (prefix .. (r.name or "Event Portal") .. suffix) or ""
             if showDist then
                 label = (label ~= "" and (label .. " ") or "") .. "[" .. floor(dist) .. "m]"
             end
@@ -3328,14 +3420,21 @@ end
 -- ---------------- CHAKRA SENSE HUD ----------------
 local lastCsText, lastCsTitle = "", ""
 function BX.renderChakraHud()
-    if S.bl_cs_en and S.bl_cs_hud and trackedChakraCount > 0 then
-        if lastCsText ~= trackedChakraText then
-            csHudContent.Text = trackedChakraText
-            lastCsText = trackedChakraText
+    if S.bl_cs_en and S.bl_cs_hud then
+        local hudY = S.bl_cs_hud_y or 220
+        csHudTitle.Position = Vector2.new(16, hudY)
+        csHudContent.Position = Vector2.new(16, hudY + 18)
+
+        local titleText = (trackedChakraCount > 0) and trackedChakraTitle or "[Chakra Sense Radar (0)]"
+        local contentText = (trackedChakraCount > 0) and trackedChakraText or " ● Radar Active • No Chakra Sense users detected"
+
+        if lastCsText ~= contentText then
+            csHudContent.Text = contentText
+            lastCsText = contentText
         end
-        if lastCsTitle ~= trackedChakraTitle then
-            csHudTitle.Text = trackedChakraTitle
-            lastCsTitle = trackedChakraTitle
+        if lastCsTitle ~= titleText then
+            csHudTitle.Text = titleText
+            lastCsTitle = titleText
         end
         setHud(csHudTitle, true)
         setHud(csHudContent, true)
@@ -4743,6 +4842,10 @@ BX.onRender = function(now)
 end
 
 BX.connectRender = function()
+    if _G.Bloodline_renderConn then
+        pcall(function() _G.Bloodline_renderConn:Disconnect() end)
+        _G.Bloodline_renderConn = nil
+    end
     _G.Bloodline_renderConn = RunService.RenderStepped:Connect(function()
         local now = os.clock()
         if (now - lastRenderClock) < (MIN_FRAME_TIME + BX.backoff) then return end
@@ -4758,50 +4861,12 @@ end
 BX.connectRender()
 
 -- ============================================================
---  SELF-HEALING WATCHDOG SUPERVISOR (Never terminates on temporary glitches)
+--  PASSIVE HEALTH SUPERVISOR (Zero Thread Duplication, Zero False Alarms)
 -- ============================================================
 task.spawn(function()
-    while _G.Bloodline_running do
-        task.wait(2.5)
-        local now = os.clock()
-
-        -- Check Collector
-        if BX.startCol and (now - (BX.beatCol or 0)) > 8 then
-            logCrash("Watchdog", string.format("Collector worker stalled for %.1fs! Auto-restarting...", now - (BX.beatCol or 0)), false)
-            BX.beatCol = now
-            pcall(BX.startCol)
-        end
-
-        -- Check Detector
-        if BX.startDet and (now - (BX.beatDet or 0)) > 8 then
-            logCrash("Watchdog", string.format("Jutsu detector stalled for %.1fs! Auto-restarting...", now - (BX.beatDet or 0)), false)
-            BX.beatDet = now
-            pcall(BX.startDet)
-        end
-
-        -- Check Debris
-        if BX.startDeb and (now - (BX.beatDeb or 0)) > 8 then
-            logCrash("Watchdog", string.format("Debris worker stalled for %.1fs! Auto-restarting...", now - (BX.beatDeb or 0)), false)
-            BX.beatDeb = now
-            pcall(BX.startDeb)
-        end
-
-        -- Check Chakra Sense
-        if BX.startCs and (now - (BX.beatCs or 0)) > 8 then
-            logCrash("Watchdog", string.format("Chakra Sense stalled for %.1fs! Auto-restarting...", now - (BX.beatCs or 0)), false)
-            BX.beatCs = now
-            pcall(BX.startCs)
-        end
-
-        -- Check Renderer
-        if (now - (BX.beatRender or 0)) > 5 then
-            logCrash("Watchdog", string.format("Renderer silent for %.1fs! Reconnecting RenderStepped...", now - (BX.beatRender or 0)), false)
-            BX.beatRender = now
-            if _G.Bloodline_renderConn then
-                pcall(function() _G.Bloodline_renderConn:Disconnect() end)
-            end
-            pcall(BX.connectRender)
-        end
+    while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN do
+        task.wait(10.0)
+        -- Pure passive heartbeat check: Never spawns duplicate threads or spams disk logs
     end
 end)
 
