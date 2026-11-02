@@ -508,6 +508,10 @@ local S = {
     bl_stun_hyper = true,
     bl_stun_hit = true,
     bl_stun_knock = true,
+    -- Stamina Counter
+    bl_stamina_en = true,
+    bl_stamina_size = 14,
+    bl_stamina_self = false,
 
     -- Leaderboard Inspector
     bl_inspect_en = true,
@@ -711,6 +715,7 @@ if ok_jdui and res_jdui then
     islCfg:AddToggle({ Title = "Show Own I-Frames", Flag = "bl_iframe_self", Default = false, Callback = function(v) S.bl_iframe_self = v; settingsVersion = settingsVersion + 1 end })
     islCfg:AddToggle({ Title = "Show Own Mode Status", Flag = "bl_mode_self", Default = false, Callback = function(v) S.bl_mode_self = v; settingsVersion = settingsVersion + 1 end })
     islCfg:AddToggle({ Title = "Show Own Stun Status", Flag = "bl_stun_self", Default = false, Callback = function(v) S.bl_stun_self = v; settingsVersion = settingsVersion + 1 end })
+    islCfg:AddToggle({ Title = "Show Own Stamina Counter", Flag = "bl_stamina_self", Default = false, Callback = function(v) S.bl_stamina_self = v; settingsVersion = settingsVersion + 1 end })
 
     local islJutsu = tabCombat:AddIsland({ Title = "Jutsu Overhead Tags" })
     islJutsu:AddToggle({ Title = "Show Jutsu Above Head", Flag = "bl_jutsu_tag", Default = true, Callback = function(v) S.bl_jutsu_tag = v; settingsVersion = settingsVersion + 1 end })
@@ -788,6 +793,21 @@ if ok_jdui and res_jdui then
     islAwaken:AddToggle({ Title = "Show HyperArmor", Flag = "bl_stun_hyper", Default = true, Callback = function(v) S.bl_stun_hyper = v; settingsVersion = settingsVersion + 1 end })
     islAwaken:AddToggle({ Title = "Show Stunned & Parried", Flag = "bl_stun_hit", Default = true, Callback = function(v) S.bl_stun_hit = v; settingsVersion = settingsVersion + 1 end })
     islAwaken:AddToggle({ Title = "Show Knockdown", Flag = "bl_stun_knock", Default = true, Callback = function(v) S.bl_stun_knock = v; settingsVersion = settingsVersion + 1 end })
+
+    local islStamina = tabCombat:AddIsland({ Title = "Stamina Counter" })
+    islStamina:AddToggle({ Title = "Stamina Counter Enabled", Flag = "bl_stamina_en", Default = true, Callback = function(v) S.bl_stamina_en = v; settingsVersion = settingsVersion + 1 end })
+    islStamina:AddToggle({ Title = "Show Own Stamina", Flag = "bl_stamina_self", Default = false, Callback = function(v) S.bl_stamina_self = v; settingsVersion = settingsVersion + 1 end })
+    islStamina:AddSlider({
+        Title = "Stamina Text Size",
+        Flag = "bl_stamina_size",
+        Min = 10, Max = 32, Step = 1,
+        Default = 14,
+        Suffix = " pt",
+        Callback = function(v)
+            S.bl_stamina_size = math.floor(tonumber(v) or 14)
+            settingsVersion = settingsVersion + 1
+        end
+    })
 
     local islInspect = tabCombat:AddIsland({ Title = "Player Profile Inspector" })
     islInspect:AddToggle({ Title = "Leaderboard Click to Inspect", Flag = "bl_inspect_en", Default = true, Callback = function(v) S.bl_inspect_en = v; settingsVersion = settingsVersion + 1 end })
@@ -1042,6 +1062,24 @@ for i = 1, 16 do
 end
 _G.Bloodline_StunRadar = StunRadar
 
+-- Stamina / Jump Counter Indicator State
+local StaminaRadar = {
+    tags = {},
+    cache = {},     -- [playerName] = JumpCounters instance
+    cacheAt = {},
+}
+for i = 1, 24 do
+    local tag = Drawing.new("Text")
+    tag.Size = 14
+    tag.Font = Drawing.Fonts.SystemBold
+    tag.Center = false
+    tag.Outline = true
+    tag.Color = Color3.fromRGB(195, 115, 255)
+    tag.Visible = false
+    StaminaRadar.tags[i] = { tag = tag, vis = false, text = "", col = nil, size = 14, x = nil, y = nil }
+end
+_G.Bloodline_StaminaRadar = StaminaRadar
+
 -- Shadow visibility flags: we never READ .Visible from a Drawing; we remember what we last
 -- wrote and only write on change.
 local function setVis(s, key, want)
@@ -1256,6 +1294,12 @@ _G.Bloodline_cleanup = function()
             safeRemove(_G.Bloodline_StunRadar.tags[i].tag)
         end
         _G.Bloodline_StunRadar = nil
+    end
+    if _G.Bloodline_StaminaRadar and _G.Bloodline_StaminaRadar.tags then
+        for i = 1, #_G.Bloodline_StaminaRadar.tags do
+            safeRemove(_G.Bloodline_StaminaRadar.tags[i].tag)
+        end
+        _G.Bloodline_StaminaRadar = nil
     end
 
     if _G.Bloodline_eventBox then
@@ -1810,6 +1854,12 @@ local function refreshPlayers(now)
             StunRadar.cache[n] = nil
             StunRadar.cacheAt[n] = nil
         end
+    for n in pairs(StaminaRadar.cache) do
+        if not names[n] then
+            StaminaRadar.cache[n] = nil
+            StaminaRadar.cacheAt[n] = nil
+        end
+    end
     end
 end
 
@@ -2071,7 +2121,7 @@ BX.startDet = function()
             end
 
             local delay = CYCLE_OFF
-            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en then
+            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en then
                 if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
                     delay = CYCLE_ACTIVE
                 else
@@ -4137,6 +4187,104 @@ function BX.renderStunTags()
     BX.hideStunTags(count + 1)
 end
 
+-- ---------------- STAMINA (JUMP COUNTER) INDICATORS ----------------
+function BX.hideStaminaTags(from)
+    local tags = StaminaRadar.tags
+    for i = from, #tags do
+        local t = tags[i]
+        if t.vis then
+            t.tag.Visible = false
+            t.vis = false
+        end
+    end
+end
+
+function BX.renderStaminaTags()
+    local tags = StaminaRadar.tags
+    local count = 0
+    if S.bl_stamina_en and JutsuRadar.order then
+        local order = JutsuRadar.order
+        local roots = JutsuRadar.roots
+        local near = JutsuRadar.near
+        local maxTags = #tags
+        local tagSize = S.bl_stamina_size or 14
+        local tagCol = Color3.fromRGB(195, 115, 255)
+        local lp = Players.LocalPlayer
+        local myName = lp and lp.Name
+        local maxDist = S.bl_combat_dist or 400
+
+        for i = 1, #order do
+            if count >= maxTags then break end
+            local pn = order[i]
+            local d = near[pn]
+            if not d or d > maxDist then break end
+            local isSelf = (myName and pn == myName) or (lp and pn == lp.Name)
+            if isSelf and not S.bl_stamina_self then
+                -- skip self if not enabled
+            else
+                local root = roots[pn]
+                if root then
+                    local jc = StaminaRadar.cache[pn]
+                    if not jc or (rNow - (StaminaRadar.cacheAt[pn] or 0)) > 5.0 then
+                        local rsSettings = JutsuRadar.rsSettingsCache or game:GetService("ReplicatedStorage"):FindFirstChild("Settings")
+                        local f = rsSettings and rsSettings:FindFirstChild(pn)
+                        jc = f and f:FindFirstChild("JumpCounters")
+                        StaminaRadar.cache[pn] = jc
+                        StaminaRadar.cacheAt[pn] = rNow
+                    end
+
+                    if jc then
+                        local okV, jVal = BX.get(jc)
+                        if okV and type(jVal) == "number" then
+                            local okP, rPos = BX.pos(root)
+                            if okP and isValidVec3(rPos) then
+                                local okS, sp, onScreen = pcall(WorldToScreen, rPos)
+                                if okS and onScreen and isValidVec2(sp) then
+                                    local dist = (rCamPos - rPos).Magnitude
+                                    local rawH = (5.5 / (max(dist, 1) * rTan)) * rVpH
+                                    if isValidNum(rawH) then
+                                        local h = clamp(floor(rawH), 16, 450)
+                                        local w = clamp(floor(h * 0.55), 8, 300)
+                                        count = count + 1
+                                        local t = tags[count]
+                                        local label = tostring(math.floor(jVal))
+
+                                        if t.text ~= label then
+                                            t.tag.Text = label
+                                            t.text = label
+                                        end
+                                        if t.col ~= tagCol then
+                                            t.tag.Color = tagCol
+                                            t.col = tagCol
+                                        end
+                                        if t.size ~= tagSize then
+                                            t.tag.Size = tagSize
+                                            t.size = tagSize
+                                        end
+
+                                        -- Positioned Right Next to their character (NOT overhead!)
+                                        local x = floor(sp.X + floor(w * 0.5) + 6)
+                                        local y = floor(sp.Y - 8)
+                                        if t.x ~= x or t.y ~= y then
+                                            t.x = x; t.y = y
+                                            t.tag.Position = Vector2.new(x, y)
+                                        end
+                                        if not t.vis then
+                                            t.tag.Visible = true
+                                            t.vis = true
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    BX.hideStaminaTags(count + 1)
+end
+
 -- ============================================================
 --  PLAYER INSPECTOR SYSTEM
 -- ============================================================
@@ -5268,6 +5416,12 @@ function BX.fetchPlayerDetails(p)
         end
     end
     table.sort(skills)
+    -- Stamina / Jump Counter
+    local staminaVal = "N/A"
+    local jc = s and s:FindFirstChild("JumpCounters")
+    if jc and type(jc.Value) == "number" then
+        staminaVal = tostring(math.floor(jc.Value))
+    end
 
     return {
         name = pName,
@@ -5281,6 +5435,7 @@ function BX.fetchPlayerDetails(p)
         traits = traitsStr,
         traitsList = traits,
         skills = skills,
+        stamina = staminaVal,
     }
 end
 
@@ -5365,7 +5520,7 @@ function BX.showProfileCard(player, charName)
     -- Row 3: Mode & Rings
     lineY = lineY + 16
     Card.lines[4].Position = Vector2.new(posX + 10, lineY)
-    Card.lines[4].Text = "Awakening: " .. d.mode .. "   |   Rings: " .. d.rings
+    Card.lines[4].Text = "Awakening: " .. d.mode .. "   |   Rings: " .. d.rings .. "   |   Stamina: " .. (d.stamina or "N/A")
     Card.lines[4].Color = Color3.fromRGB(205, 210, 225)
     Card.lines[4].Visible = true
 
@@ -5746,6 +5901,7 @@ function BX.renderFrame()
     pcall(BX.renderIFrameTags)
     pcall(BX.renderModeTags)
     pcall(BX.renderStunTags)
+    pcall(BX.renderStaminaTags)
 end
 
 BX.onRender = function(now)
