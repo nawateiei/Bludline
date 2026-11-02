@@ -1,5 +1,5 @@
 -- ============================================================
---  "Bloodline" — Master Two-Loop Combat-Engine ESP for Matcha
+--  "Bloodline" - Master Two-Loop Combat-Engine ESP for Matcha
 --  Built for Roblox Place ID: 10266164381 (Bloodlines)
 --
 --  MERGED BUILD:
@@ -174,67 +174,67 @@ end
 local RARE_ITEMS = {
     ["Life Up Fruit"] = {
         color  = Color3.fromRGB(50, 255, 120),
-        label  = "★ Life Up Fruit ★",
+        label  = "* Life Up Fruit *",
         filter = "Life Up Fruit"
     },
     ["Fruit Of Forgetfulness"] = {
         color  = Color3.fromRGB(255, 75, 150),
-        label  = "★ Fruit of Forgetfulness ★",
+        label  = "* Fruit of Forgetfulness *",
         filter = "Fruit of Forgetfulness"
     },
     ["Fruit of Forgetfulness"] = {
         color  = Color3.fromRGB(255, 75, 150),
-        label  = "★ Fruit of Forgetfulness ★",
+        label  = "* Fruit of Forgetfulness *",
         filter = "Fruit of Forgetfulness"
     },
     ["Chakra Fruit"] = {
         color  = Color3.fromRGB(180, 70, 255),
-        label  = "★ Chakra Fruit ★",
+        label  = "* Chakra Fruit *",
         filter = "Chakra Fruit"
     },
     ["Mastery Scroll"] = {
         color  = Color3.fromRGB(0, 230, 255),
-        label  = "★ Mastery Scroll ★",
+        label  = "* Mastery Scroll *",
         filter = "Scrolls"
     },
     ["Summoning Scroll"] = {
         color  = Color3.fromRGB(0, 230, 255),
-        label  = "★ Summoning Scroll ★",
+        label  = "* Summoning Scroll *",
         filter = "Scrolls"
     },
     ["Trait Scroll"] = {
         color  = Color3.fromRGB(255, 160, 40),
-        label  = "★ Trait Scroll ★",
+        label  = "* Trait Scroll *",
         filter = "Scrolls"
     },
 
     -- ================= RARE RINGS (Combined Toggle) =================
-    ["Ring of Favor"]           = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Favor ★", filter = "Rings" },
-    ["Ring of Vitality"]        = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Vitality ★", filter = "Rings" },
-    ["Ring of Nourishment"]     = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Nourishment ★", filter = "Rings" },
-    ["Ring of Infusion"]        = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Infusion ★", filter = "Rings" },
-    ["Ring of Remedy"]          = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Remedy ★", filter = "Rings" },
-    ["Bloodbite Ring"]          = { color = Color3.fromRGB(255, 185, 30), label = "★ Bloodbite Ring ★", filter = "Rings" },
-    ["Ring of Resistance"]      = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Resistance ★", filter = "Rings" },
-    ["Ring of Dexterity"]       = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Dexterity ★", filter = "Rings" },
-    ["Ring of Neoncat"]         = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of Neoncat ★", filter = "Rings" },
-    ["Ring of a Helping Hand"]  = { color = Color3.fromRGB(255, 185, 30), label = "★ Ring of a Helping Hand ★", filter = "Rings" },
+    ["Ring of Favor"]           = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Favor *", filter = "Rings" },
+    ["Ring of Vitality"]        = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Vitality *", filter = "Rings" },
+    ["Ring of Nourishment"]     = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Nourishment *", filter = "Rings" },
+    ["Ring of Infusion"]        = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Infusion *", filter = "Rings" },
+    ["Ring of Remedy"]          = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Remedy *", filter = "Rings" },
+    ["Bloodbite Ring"]          = { color = Color3.fromRGB(255, 185, 30), label = "* Bloodbite Ring *", filter = "Rings" },
+    ["Ring of Resistance"]      = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Resistance *", filter = "Rings" },
+    ["Ring of Dexterity"]       = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Dexterity *", filter = "Rings" },
+    ["Ring of Neoncat"]         = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of Neoncat *", filter = "Rings" },
+    ["Ring of a Helping Hand"]  = { color = Color3.fromRGB(255, 185, 30), label = "* Ring of a Helping Hand *", filter = "Rings" },
 
     -- ================= SCHEMATICS (Combined Toggle) =================
-    ["Kusanagi Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "★ Kusanagi Schematics ★", filter = "Schematics" },
-    ["Raijin Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "★ Raijin Schematics ★", filter = "Schematics" },
-    ["Staff Schematics"]        = { color = Color3.fromRGB(100, 190, 255), label = "★ Staff Schematics ★", filter = "Schematics" },
-    ["Executioner Schematics"]  = { color = Color3.fromRGB(100, 190, 255), label = "★ Executioner Schematics ★", filter = "Schematics" },
-    ["Samehada Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "★ Samehada Schematics ★", filter = "Schematics" },
-    ["Gunbai Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "★ Gunbai Schematics ★", filter = "Schematics" },
-    ["Ring Schematic"]          = { color = Color3.fromRGB(100, 190, 255), label = "★ Ring Schematic ★", filter = "Schematics" },
+    ["Kusanagi Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "* Kusanagi Schematics *", filter = "Schematics" },
+    ["Raijin Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "* Raijin Schematics *", filter = "Schematics" },
+    ["Staff Schematics"]        = { color = Color3.fromRGB(100, 190, 255), label = "* Staff Schematics *", filter = "Schematics" },
+    ["Executioner Schematics"]  = { color = Color3.fromRGB(100, 190, 255), label = "* Executioner Schematics *", filter = "Schematics" },
+    ["Samehada Schematics"]     = { color = Color3.fromRGB(100, 190, 255), label = "* Samehada Schematics *", filter = "Schematics" },
+    ["Gunbai Schematics"]       = { color = Color3.fromRGB(100, 190, 255), label = "* Gunbai Schematics *", filter = "Schematics" },
+    ["Ring Schematic"]          = { color = Color3.fromRGB(100, 190, 255), label = "* Ring Schematic *", filter = "Schematics" },
 
     -- ================= RARE EYES (Combined Toggle) =================
-    ["Sharingan Eyes"]          = { color = Color3.fromRGB(255, 45, 75), label = "★ Sharingan Eyes ★", filter = "Eyes" },
-    ["Byakugan Eyes"]           = { color = Color3.fromRGB(230, 230, 255), label = "★ Byakugan Eyes ★", filter = "Eyes" },
-    ["Mangekyo Eyes"]           = { color = Color3.fromRGB(255, 30, 100), label = "★ Mangekyo Eyes ★", filter = "Eyes" },
-    ["Ketsuryugan Eyes"]        = { color = Color3.fromRGB(255, 20, 50), label = "★ Ketsuryugan Eyes ★", filter = "Eyes" },
-    ["Rinnegan Eyes"]           = { color = Color3.fromRGB(195, 130, 255), label = "★ Rinnegan Eyes ★", filter = "Eyes" },
+    ["Sharingan Eyes"]          = { color = Color3.fromRGB(255, 45, 75), label = "* Sharingan Eyes *", filter = "Eyes" },
+    ["Byakugan Eyes"]           = { color = Color3.fromRGB(230, 230, 255), label = "* Byakugan Eyes *", filter = "Eyes" },
+    ["Mangekyo Eyes"]           = { color = Color3.fromRGB(255, 30, 100), label = "* Mangekyo Eyes *", filter = "Eyes" },
+    ["Ketsuryugan Eyes"]        = { color = Color3.fromRGB(255, 20, 50), label = "* Ketsuryugan Eyes *", filter = "Eyes" },
+    ["Rinnegan Eyes"]           = { color = Color3.fromRGB(195, 130, 255), label = "* Rinnegan Eyes *", filter = "Eyes" },
 }
 
 local KNOWN_ITEMS = {
@@ -2170,13 +2170,19 @@ local function addWorldBoss(obj, objName, addr)
 end
 
 local function isEventPortal(name)
-    if type(name) ~= "string" or #name == 0 or name == "Part" or name == "Portal" or name == "Portal2" or name == "ShukakuPortal" then
+    if type(name) ~= "string" or #name == 0 then
         return false
     end
     local l = name:lower()
     if l:find("unstable rift") then return false end
-    if l:find("sasuke") or l:find("infernal") or l:find("vampiric") then return true end
-    if l:find("portal") or l:find("rift") then return true end
+
+    -- ONLY Infernal Sasuke Portal / Rift (and Vampiric variant)
+    -- Must have "infernal" (or "vampiric") prefix AND relate to sasuke / portal / rift.
+    -- This strictly ignores player-casted "Sasuke Portal" or generic "Rift" / "Portal"
+    local hasEvent = (l:find("infernal") ~= nil or l:find("vampiric") ~= nil)
+    if hasEvent and (l:find("sasuke") ~= nil or l:find("portal") ~= nil or l:find("rift") ~= nil) then
+        return true
+    end
     return false
 end
 
@@ -2391,9 +2397,9 @@ local function processObject(obj)
         local rareInfo = RARE_ITEMS[objName]
         if not rareInfo then
             if string.find(objName, "Schematic", 1, true) then
-                rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "★ " .. objName .. " ★", filter = "Schematics" }
+                rareInfo = { color = Color3.fromRGB(100, 190, 255), label = "* " .. objName .. " *", filter = "Schematics" }
             elseif string.find(objName, " Eyes", 1, true) then
-                rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "★ " .. objName .. " ★", filter = "Eyes" }
+                rareInfo = { color = Color3.fromRGB(255, 45, 75), label = "* " .. objName .. " *", filter = "Eyes" }
             end
         end
 
@@ -3231,9 +3237,9 @@ local function drawRiftEntity(e, r)
         if e.owner ~= r then e.owner = r; e.textAt = 0 end
         if rNow - e.textAt >= TEXT_INTERVAL then
             e.textAt = rNow
-            local prefix = r.isSasuke and "🔥 " or "🎃 "
-            local suffix = r.isSasuke and " 🔥" or " 🎃"
-            local label = showName and (prefix .. (r.name or "Event Portal") .. suffix) or ""
+            local label = showName and ("* " .. (r.name or "Infernal Sasuke Portal") .. " *") or ""
+
+
             if showDist then
                 label = (label ~= "" and (label .. " ") or "") .. "[" .. floor(dist) .. "m]"
             end
@@ -3426,7 +3432,7 @@ function BX.renderChakraHud()
         csHudContent.Position = Vector2.new(16, hudY + 18)
 
         local titleText = (trackedChakraCount > 0) and trackedChakraTitle or "[Chakra Sense Radar (0)]"
-        local contentText = (trackedChakraCount > 0) and trackedChakraText or " ● Radar Active • No Chakra Sense users detected"
+        local contentText = (trackedChakraCount > 0) and trackedChakraText or " [*] Radar Active No Chakra Sense users detected"
 
         if lastCsText ~= contentText then
             csHudContent.Text = contentText
@@ -3483,7 +3489,7 @@ local function drawBeastTamer(bt)
 
     if rNow - evTextAt >= TEXT_INTERVAL then
         evTextAt = rNow
-        local label = "★ BEAST TAMER ★ [" .. floor(dist) .. "m]"
+        local label = "* BEAST TAMER * [" .. floor(dist) .. "m]"
         if label ~= evLastText then
             eventTag.Text = label
             evLastText = label
@@ -5054,10 +5060,10 @@ function BX.showArmorCard(armorName, targetPlayer, parentPos)
     -- Line 1: Status (Broken vs Intact)
     ArmorCard.lines[1].Position = Vector2.new(posX + 10, curY)
     if isBroken then
-        ArmorCard.lines[1].Text = "• Status: ⚠ BROKEN (Defense disabled until repaired!)"
+        ArmorCard.lines[1].Text = "[!] Status: BROKEN (Defense disabled until repaired!)"
         ArmorCard.lines[1].Color = Color3.fromRGB(255, 90, 90)
     else
-        ArmorCard.lines[1].Text = "• Status: ✓ Intact (Active armor protection)"
+        ArmorCard.lines[1].Text = "Status: Intact (Active armor protection)"
         ArmorCard.lines[1].Color = Color3.fromRGB(75, 235, 125)
     end
     ArmorCard.lines[1].Visible = true
@@ -5065,49 +5071,49 @@ function BX.showArmorCard(armorName, targetPlayer, parentPos)
     curY = curY + 18
     -- Line 2: Health
     ArmorCard.lines[2].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[2].Text = "• Max Health Boost: " .. st.hp
+    ArmorCard.lines[2].Text = "Health Boost: " .. st.hp
     ArmorCard.lines[2].Color = Color3.fromRGB(115, 230, 175)
     ArmorCard.lines[2].Visible = true
 
     curY = curY + 16
     -- Line 3: Speed
     ArmorCard.lines[3].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[3].Text = "• Movement Speed: " .. st.speed
+    ArmorCard.lines[3].Text = "Movement Speed: " .. st.speed
     ArmorCard.lines[3].Color = Color3.fromRGB(120, 205, 255)
     ArmorCard.lines[3].Visible = true
 
     curY = curY + 16
     -- Line 4: Damage Multiplier
     ArmorCard.lines[4].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[4].Text = "• Attack / Skill Damage: " .. st.dmg
+    ArmorCard.lines[4].Text = "Skill / Jutsu Damage: " .. st.dmg
     ArmorCard.lines[4].Color = Color3.fromRGB(255, 205, 85)
     ArmorCard.lines[4].Visible = true
 
     curY = curY + 16
     -- Line 5: Regeneration
     ArmorCard.lines[5].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[5].Text = "• Chakra: " .. st.chakra .. "  |  HP Regen: " .. st.hpRegen
+    ArmorCard.lines[5].Text = "Chakra: " .. st.chakra .. "  |  HP Regen: " .. st.hpRegen
     ArmorCard.lines[5].Color = (st.hpRegen ~= "None (0x)" and Color3.fromRGB(255, 145, 195) or Color3.fromRGB(215, 220, 235))
     ArmorCard.lines[5].Visible = true
 
     curY = curY + 16
     -- Line 6: Counters & Capacity
     ArmorCard.lines[6].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[6].Text = "• Counters: " .. st.counters
+    ArmorCard.lines[6].Text = "Counters: " .. st.counters
     ArmorCard.lines[6].Color = Color3.fromRGB(220, 185, 255)
     ArmorCard.lines[6].Visible = true
 
     curY = curY + 16
     -- Line 7: Resistances
     ArmorCard.lines[7].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[7].Text = "• Resistances: " .. st.res
+    ArmorCard.lines[7].Text = "Resistances: " .. st.res
     ArmorCard.lines[7].Color = Color3.fromRGB(195, 210, 235)
     ArmorCard.lines[7].Visible = true
 
     curY = curY + 16
     -- Line 8: Notes / Info
     ArmorCard.lines[8].Position = Vector2.new(posX + 10, curY)
-    ArmorCard.lines[8].Text = "• Info: " .. (st.notes and st.notes:sub(1, 48) or "Standard equipment")
+    ArmorCard.lines[8].Text = "Info: " .. (st.notes and st.notes:sub(1, 48) or "Standard equipment")
     ArmorCard.lines[8].Color = Color3.fromRGB(160, 175, 195)
     ArmorCard.lines[8].Visible = true
 
@@ -5164,21 +5170,25 @@ function BX.getLeaderboardLeftEdge()
 end
 
 function BX.splitItemsIntoLines(items, maxPerLine, maxChars)
+    if not items or #items == 0 then return {"None"} end
+    maxPerLine = (type(maxPerLine) == "number") and maxPerLine or 3
+    maxChars = (type(maxChars) == "number") and maxChars or 54
     local lines = {}
     local cur = {}
     local curLen = 0
     for _, it in ipairs(items) do
-        local itLen = #it + 4
-        if #cur >= maxPerLine or (curLen + itLen > maxChars and #cur > 0) then
-            table.insert(lines, table.concat(cur, "  "))
-            cur = {}
-            curLen = 0
+        local itLen = #it + 2
+        if #cur > 0 and (#cur >= maxPerLine or (curLen + itLen > maxChars)) then
+            table.insert(lines, table.concat(cur, ", "))
+            cur = { it }
+            curLen = #it
+        else
+            table.insert(cur, it)
+            curLen = curLen + itLen
         end
-        table.insert(cur, "• " .. it)
-        curLen = curLen + itLen
     end
     if #cur > 0 then
-        table.insert(lines, table.concat(cur, "  "))
+        table.insert(lines, table.concat(cur, ", "))
     end
     return lines
 end
@@ -5347,7 +5357,7 @@ function BX.showProfileCard(player, charName)
     lineY = lineY + 13
     Card.armorLineY = lineY
     Card.lines[3].Position = Vector2.new(posX + 10, lineY)
-    local armorLabel = (d.armor and d.armor ~= "None" and d.armor ~= "") and (d.armor .. "  [🔍 View Stats]") or "None"
+    local armorLabel = (d.armor and d.armor ~= "None" and d.armor ~= "") and (d.armor .. "  [View Stats]") or "None"
     Card.lines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. armorLabel
     Card.lines[3].Color = (d.armor and d.armor ~= "None" and d.armor ~= "") and Color3.fromRGB(255, 230, 150) or Color3.fromRGB(225, 230, 240)
     Card.lines[3].Visible = true
@@ -5363,14 +5373,14 @@ function BX.showProfileCard(player, charName)
     lineY = lineY + 18
     local tList = d.traitsList or {}
     Card.lines[5].Position = Vector2.new(posX + 10, lineY)
-    Card.lines[5].Text = "▶ Traits & Innate Eyes (" .. #tList .. "):"
+    Card.lines[5].Text = ">> Traits & Innate Eyes (" .. #tList .. "):"
     Card.lines[5].Color = Color3.fromRGB(205, 125, 255)
     Card.lines[5].Visible = true
 
     -- Traits Content
     lineY = lineY + 15
     local tLines = BX.splitItemsIntoLines(tList, 2, 54)
-    if #tLines == 0 then tLines = {"• None"} end
+    if #tLines == 0 then tLines = {"None"} end
     Card.lines[6].Position = Vector2.new(posX + 15, lineY)
     Card.lines[6].Text = tLines[1] or ""
     Card.lines[6].Color = Color3.fromRGB(225, 195, 255)
@@ -5390,13 +5400,13 @@ function BX.showProfileCard(player, charName)
     lineY = lineY + 18
     local sList = d.skills or {}
     Card.lines[8].Position = Vector2.new(posX + 10, lineY)
-    Card.lines[8].Text = "▶ Equipped Jutsu / Skills (" .. #sList .. "):"
+    Card.lines[8].Text = ">> Equipped Jutsu / Skills (" .. #sList .. "):"
     Card.lines[8].Color = Color3.fromRGB(255, 215, 60)
     Card.lines[8].Visible = true
 
     -- Skills Content (up to 4 lines)
-    local sLines = BX.splitItemsIntoLines(sList, 4, 58)
-    if #sLines == 0 then sLines = {"• None"} end
+    local sLines = BX.splitItemsIntoLines(sList, 3, 54)
+    if #sLines == 0 then sLines = {"None"} end
 
     for i = 1, 4 do
         local lIdx = 8 + i
