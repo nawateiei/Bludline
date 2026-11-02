@@ -4220,6 +4220,905 @@ for i = 1, 14 do
     table.insert(_G.Bloodline_ProfileDrawings, Card.lines[i])
 end
 
+-- ============================================================
+--  ARMOR STATS DATABASE & INSPECT POPUP
+-- ============================================================
+local ARMOR_DATA = {
+    ["Ascended Martial Artist"] = {
+        name = "Ascended Martial Artist",
+        hp = "+30 Max HP",
+        speed = "+22% Speed",
+        dmg = "+20% Taijutsu (Melee)",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+1 Jump Counter, +1 Food Counter",
+        res = "Standard physical resistance",
+        notes = "High-tier Taijutsu gear. Upgraded from Martial Artist at Fort Melo."
+    },
+    ["Martial Artist"] = {
+        name = "Martial Artist",
+        hp = "+25 Max HP",
+        speed = "+17% Speed",
+        dmg = "+10% Taijutsu (Melee)",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+0 Jump, +1 Food Counter",
+        res = "Standard physical resistance",
+        notes = "Drop from Neji boss / Elder's Residence."
+    },
+    ["Ascended Senju Armor"] = {
+        name = "Ascended Senju Armor",
+        hp = "+51 Max HP",
+        speed = "Base (0%)",
+        dmg = "+15% Wood Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+10% Slash Resistance",
+        notes = "Heavy armor for Wood style builds. Highest raw health pool."
+    },
+    ["Senju Armor"] = {
+        name = "Senju Armor",
+        hp = "+33 Max HP",
+        speed = "Base (0%)",
+        dmg = "+8% Wood Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "Standard physical resistance",
+        notes = "Standard Senju Wood armor."
+    },
+    ["Variant Senju Armor"] = {
+        name = "Variant Senju Armor",
+        hp = "+42 Max HP",
+        speed = "Base (0%)",
+        dmg = "+12% Wood Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+5% Slash Resistance",
+        notes = "Special variant of Senju armor."
+    },
+    ["Ascended Avenger's Outfit"] = {
+        name = "Ascended Avenger's Outfit",
+        hp = "+26 Max HP",
+        speed = "+29% Speed",
+        dmg = "+20% Lightning Boost",
+        chakra = "Base",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Jump Counter, +1 Food Counter",
+        res = "+10% Lightning Resistance",
+        notes = "Top-tier lightning assassin gear. High speed & passive HP regen."
+    },
+    ["Avenger's Outfit"] = {
+        name = "Avenger's Outfit",
+        hp = "+20 Max HP",
+        speed = "+20% Speed",
+        dmg = "+10% Lightning Boost",
+        chakra = "Base",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Jump Counter, +1 Food Counter",
+        res = "+10% Lightning Resistance",
+        notes = "Purchased for 75 Embers."
+    },
+    ["Avenger"] = {
+        name = "Avenger",
+        hp = "+20 Max HP",
+        speed = "+20% Speed",
+        dmg = "+10% Lightning Boost",
+        chakra = "Base",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Jump, +1 Food",
+        res = "+10% Lightning Resistance",
+        notes = "Avenger clothing variant."
+    },
+    ["Ascended Akatsuki Cloak"] = {
+        name = "Ascended Akatsuki Cloak",
+        hp = "+30 Max HP",
+        speed = "+18% Speed",
+        dmg = "+10% Fire & Dark Skill Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump Counter, +1 Full Food Bar",
+        res = "High stamina retention in PvP",
+        notes = "Faction master cloak. Grants +1 full Food Bar for infinite sprint travel."
+    },
+    ["Akatsuki Cloak"] = {
+        name = "Akatsuki Cloak",
+        hp = "+20 Max HP",
+        speed = "+12% Speed",
+        dmg = "+5% Fire Skill Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Full Food Bar",
+        res = "Stamina retention",
+        notes = "Faction cloak with +1 full food capacity."
+    },
+    ["Ascended Akatsuki Leader"] = {
+        name = "Ascended Akatsuki Leader",
+        hp = "+35 Max HP",
+        speed = "+20% Speed",
+        dmg = "+15% Jutsu Damage Multiplier",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump Counter, +1 Food Counter",
+        res = "+10% All Jutsu Resistance",
+        notes = "Pain / Akatsuki Leader ascended gear."
+    },
+    ["Akatsuki Leader"] = {
+        name = "Akatsuki Leader",
+        hp = "+25 Max HP",
+        speed = "+15% Speed",
+        dmg = "+10% Jutsu Damage Multiplier",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Food Counter",
+        res = "+5% All Jutsu Resistance",
+        notes = "Akatsuki Leader robe."
+    },
+    ["Ascended Assassin's Garments"] = {
+        name = "Ascended Assassin's Garments",
+        hp = "+24 Max HP",
+        speed = "+25% Speed",
+        dmg = "+18% Wind Skill Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+1 Jump Counter",
+        res = "+15% Slash Resistance",
+        notes = "Agile Wind assassin armor with heavy slash mitigation."
+    },
+    ["Assassin's Garments"] = {
+        name = "Assassin's Garments",
+        hp = "+18 Max HP",
+        speed = "+18% Speed",
+        dmg = "+10% Wind Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+10% Slash Resistance",
+        notes = "Agile wind armor."
+    },
+    ["Assassin's Kimono"] = {
+        name = "Assassin's Kimono",
+        hp = "+15 Max HP",
+        speed = "+15% Speed",
+        dmg = "+10% Wind Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+8% Slash Resistance",
+        notes = "Agile kimono."
+    },
+    ["Ascended Thunder Cloak"] = {
+        name = "Ascended Thunder Cloak",
+        hp = "+28 Max HP",
+        speed = "+26% Speed",
+        dmg = "+18% Lightning Skill Boost",
+        chakra = "+12% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+1 Jump Counter",
+        res = "+15% Lightning Resistance",
+        notes = "High-voltage cloak for Raikage / Lightning builds."
+    },
+    ["Thunder Cloak"] = {
+        name = "Thunder Cloak",
+        hp = "+20 Max HP",
+        speed = "+18% Speed",
+        dmg = "+10% Lightning Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+10% Lightning Resistance",
+        notes = "Lightning cloak."
+    },
+    ["Ascended Reanimated Cloak"] = {
+        name = "Ascended Reanimated Cloak",
+        hp = "+40 Max HP",
+        speed = "+10% Speed",
+        dmg = "+12% Dark / Forbidden Jutsu",
+        chakra = "+25% Chakra Regen",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Food Counter",
+        res = "+10% Overall Damage Resistance",
+        notes = "Edo Tensei aesthetic cloak with exceptional chakra recovery."
+    },
+    ["Reanimated Cloak"] = {
+        name = "Reanimated Cloak",
+        hp = "+28 Max HP",
+        speed = "+5% Speed",
+        dmg = "+6% Dark Jutsu",
+        chakra = "+18% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+5% Damage Resistance",
+        notes = "Reanimation cloak."
+    },
+    ["Ascended Biyo Armor"] = {
+        name = "Ascended Biyo Armor",
+        hp = "+36 Max HP",
+        speed = "+12% Speed",
+        dmg = "+20% Water Skill Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump Counter",
+        res = "+15% Water Resistance, +10% Genjutsu Buff",
+        notes = "Upgraded Biyo armor. Heavy water skill amplification."
+    },
+    ["Biyo Armor"] = {
+        name = "Biyo Armor",
+        hp = "+24 Max HP",
+        speed = "+8% Speed",
+        dmg = "+12% Water Skill Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+10% Water Resistance, +7% Genjutsu Buff",
+        notes = "Biyo Bay regional armor."
+    },
+    ["Ascended Peacemaker"] = {
+        name = "Ascended Peacemaker",
+        hp = "+34 Max HP",
+        speed = "+14% Speed",
+        dmg = "+18% Water Skill Boost",
+        chakra = "+12% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+12% Genjutsu Duration / Resistance",
+        notes = "Balanced water & genjutsu armor."
+    },
+    ["Peacemaker"] = {
+        name = "Peacemaker",
+        hp = "+22 Max HP",
+        speed = "+8% Speed",
+        dmg = "+10% Water Skill Boost",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+7% Genjutsu Buff",
+        notes = "Purchased in Biyo Town."
+    },
+    ["Ascended Moon Rags"] = {
+        name = "Ascended Moon Rags",
+        hp = "+45 Max HP",
+        speed = "+15% Speed",
+        dmg = "+15% All Jutsu & Chakra Boost",
+        chakra = "+30% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+2 Jump Counters, +1 Food Counter",
+        res = "+12% Chakra Absorption / Resistance",
+        notes = "Otsutsuki relic rags. Massive chakra pool and jump counters."
+    },
+    ["Moon Rags"] = {
+        name = "Moon Rags",
+        hp = "+30 Max HP",
+        speed = "+10% Speed",
+        dmg = "+8% Chakra Boost",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+1 Jump Counter",
+        res = "+8% Chakra Resistance",
+        notes = "Otsutsuki clan rags."
+    },
+    ["Ascended Fighter's Outfit"] = {
+        name = "Ascended Fighter's Outfit",
+        hp = "+35 Max HP",
+        speed = "+16% Speed",
+        dmg = "+15% Melee (Taijutsu)",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+30% Bleed Resistance",
+        notes = "Upgraded starter brawler set. Exceptional bleed mitigation."
+    },
+    ["Fighter's Outfit"] = {
+        name = "Fighter's Outfit",
+        hp = "+24 Max HP",
+        speed = "+10% Speed",
+        dmg = "+8% Melee",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+20% Bleed Resistance",
+        notes = "Starter set bought in Biyo Bay."
+    },
+    ["Ascended Brawler's Outfit"] = {
+        name = "Ascended Brawler's Outfit",
+        hp = "+35 Max HP",
+        speed = "+16% Speed",
+        dmg = "+15% Melee (Taijutsu)",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+30% Bleed Resistance",
+        notes = "Brawler set."
+    },
+    ["Brawler's Outfit"] = {
+        name = "Brawler's Outfit",
+        hp = "+24 Max HP",
+        speed = "+10% Speed",
+        dmg = "+8% Melee",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+20% Bleed Resistance",
+        notes = "Brawler set."
+    },
+    ["Ascended Wanderer's Outfit"] = {
+        name = "Ascended Wanderer's Outfit",
+        hp = "+25 Max HP",
+        speed = "+24% Speed",
+        dmg = "+12% Weapon Damage",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+10% Slash Resistance",
+        notes = "High-mobility wanderer coat."
+    },
+    ["Wanderer's Outfit"] = {
+        name = "Wanderer's Outfit",
+        hp = "+18 Max HP",
+        speed = "+16% Speed",
+        dmg = "+6% Weapon Damage",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+5% Slash Resistance",
+        notes = "Standard wanderer outfit."
+    },
+    ["Ascended Anbu"] = {
+        name = "Ascended Anbu",
+        hp = "+32 Max HP",
+        speed = "+22% Speed",
+        dmg = "+14% Stealth / Weapon Damage",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+12% Slash & Projectile Resistance",
+        notes = "Special black ops tactical vest."
+    },
+    ["Anbu"] = {
+        name = "Anbu",
+        hp = "+22 Max HP",
+        speed = "+14% Speed",
+        dmg = "+8% Weapon Damage",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+8% Slash Resistance",
+        notes = "Anbu operative vest."
+    },
+    ["Ascended Orange Jumpsuit"] = {
+        name = "Ascended Orange Jumpsuit",
+        hp = "+38 Max HP",
+        speed = "+18% Speed",
+        dmg = "+15% Rasengan & Wind Jutsu",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Jump, +2 Food Counters",
+        res = "+10% Blunt Resistance",
+        notes = "Naruto-inspired outfit. High stamina, food counters and passive HP regen."
+    },
+    ["Orange Jumpsuit"] = {
+        name = "Orange Jumpsuit",
+        hp = "+25 Max HP",
+        speed = "+12% Speed",
+        dmg = "+8% Wind Jutsu",
+        chakra = "+12% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Food Counter",
+        res = "Blunt resistance",
+        notes = "Orange jumpsuit."
+    },
+    ["Ascended Sorythia Outfit"] = {
+        name = "Ascended Sorythia Outfit",
+        hp = "+30 Max HP",
+        speed = "+15% Speed",
+        dmg = "+18% Fire Skill Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Food Counter",
+        res = "+20% Fire / Burn Resistance",
+        notes = "Sorythia village armor. Heavy fire skill scaling."
+    },
+    ["Sorythia Outfit"] = {
+        name = "Sorythia Outfit",
+        hp = "+20 Max HP",
+        speed = "+10% Speed",
+        dmg = "+10% Fire Skill Boost",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+12% Fire Resistance",
+        notes = "Sorythia village armor."
+    },
+    ["Ascended Sorythia Kage"] = {
+        name = "Ascended Sorythia Kage",
+        hp = "+42 Max HP",
+        speed = "+20% Speed",
+        dmg = "+22% Fire Skill Boost",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+25% Fire Resistance",
+        notes = "Kage robe of Sorythia."
+    },
+    ["Ascended Durana Outfit"] = {
+        name = "Ascended Durana Outfit",
+        hp = "+28 Max HP",
+        speed = "+22% Speed",
+        dmg = "+18% Wind Skill Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump Counter",
+        res = "+15% Slash Resistance",
+        notes = "Durana village wind armor."
+    },
+    ["Durana Outfit"] = {
+        name = "Durana Outfit",
+        hp = "+18 Max HP",
+        speed = "+15% Speed",
+        dmg = "+10% Wind Skill Boost",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+10% Slash Resistance",
+        notes = "Durana village armor."
+    },
+    ["Ascended Durana Kage"] = {
+        name = "Ascended Durana Kage",
+        hp = "+40 Max HP",
+        speed = "+25% Speed",
+        dmg = "+22% Wind Skill Boost",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+20% Slash Resistance",
+        notes = "Kage robe of Durana."
+    },
+    ["Ascended Rain Outfit"] = {
+        name = "Ascended Rain Outfit",
+        hp = "+32 Max HP",
+        speed = "+16% Speed",
+        dmg = "+18% Water Skill Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Food Counter",
+        res = "+15% Water Resistance",
+        notes = "Amegakure / Rain village armor."
+    },
+    ["Rain Outfit"] = {
+        name = "Rain Outfit",
+        hp = "+22 Max HP",
+        speed = "+10% Speed",
+        dmg = "+10% Water Skill Boost",
+        chakra = "+8% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+10% Water Resistance",
+        notes = "Rain village outfit."
+    },
+    ["Ascended Rain Kage"] = {
+        name = "Ascended Rain Kage",
+        hp = "+42 Max HP",
+        speed = "+20% Speed",
+        dmg = "+22% Water Skill Boost",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+20% Water Resistance",
+        notes = "Kage robe of Rain."
+    },
+    ["Ascended Snow Outfit"] = {
+        name = "Ascended Snow Outfit",
+        hp = "+32 Max HP",
+        speed = "+16% Speed",
+        dmg = "+18% Ice Skill Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Food Counter",
+        res = "+20% Cold / Slow Resistance",
+        notes = "Snow village ice armor."
+    },
+    ["Snow Outfit"] = {
+        name = "Snow Outfit",
+        hp = "+22 Max HP",
+        speed = "+10% Speed",
+        dmg = "+10% Ice Skill Boost",
+        chakra = "+8% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+12% Cold Resistance",
+        notes = "Snow village outfit."
+    },
+    ["Ascended Snow Kage"] = {
+        name = "Ascended Snow Kage",
+        hp = "+42 Max HP",
+        speed = "+20% Speed",
+        dmg = "+22% Ice Skill Boost",
+        chakra = "+20% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+25% Cold / Ice Resistance",
+        notes = "Kage robe of Snow."
+    },
+    ["Ascended Desert Master"] = {
+        name = "Ascended Desert Master",
+        hp = "+36 Max HP",
+        speed = "+14% Speed",
+        dmg = "+20% Earth & Sand Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump, +1 Food",
+        res = "+15% Earth / Blunt Resistance",
+        notes = "Master desert sands armor."
+    },
+    ["Desert Master"] = {
+        name = "Desert Master",
+        hp = "+26 Max HP",
+        speed = "+10% Speed",
+        dmg = "+12% Earth & Sand Boost",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+10% Earth Resistance",
+        notes = "Desert robe."
+    },
+    ["Ascended Shisui Outfit"] = {
+        name = "Ascended Shisui Outfit",
+        hp = "+30 Max HP",
+        speed = "+28% Speed",
+        dmg = "+18% Body Flicker & Fire",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Base",
+        counters = "+1 Jump Counter",
+        res = "+12% Genjutsu Resistance",
+        notes = "Legendary Body Flicker / Shisui agile cloak."
+    },
+    ["Shisui Outfit"] = {
+        name = "Shisui Outfit",
+        hp = "+20 Max HP",
+        speed = "+20% Speed",
+        dmg = "+10% Fire",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+8% Genjutsu Resistance",
+        notes = "Shisui outfit."
+    },
+    ["Ascended Haku Outfit"] = {
+        name = "Ascended Haku Outfit",
+        hp = "+26 Max HP",
+        speed = "+25% Speed",
+        dmg = "+20% Ice Needles & Ice Mirror",
+        chakra = "+12% Chakra Regen",
+        hpRegen = "None (0x)",
+        counters = "+1 Jump Counter",
+        res = "+15% Projectile Resistance",
+        notes = "High-agility Ice assassin kimono."
+    },
+    ["Haku Outfit"] = {
+        name = "Haku Outfit",
+        hp = "+18 Max HP",
+        speed = "+18% Speed",
+        dmg = "+12% Ice Skill Boost",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "Base",
+        res = "+10% Projectile Resistance",
+        notes = "Haku kimono."
+    },
+    ["Ascended Kimimaro Outfit"] = {
+        name = "Ascended Kimimaro Outfit",
+        hp = "+44 Max HP",
+        speed = "+15% Speed",
+        dmg = "+18% Bone / Taijutsu Damage",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Jump Counter",
+        res = "+20% Blunt & Slash Resistance",
+        notes = "Hardened skeletal defense. Grants exceptional physical damage reduction."
+    },
+    ["Kimimaro Outfit"] = {
+        name = "Kimimaro Outfit",
+        hp = "+30 Max HP",
+        speed = "+10% Speed",
+        dmg = "+10% Bone / Taijutsu Damage",
+        chakra = "Base",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+15% Blunt Resistance",
+        notes = "Kimimaro bone outfit."
+    },
+    ["Ascended Slithering Outfit"] = {
+        name = "Ascended Slithering Outfit",
+        hp = "+36 Max HP",
+        speed = "+18% Speed",
+        dmg = "+15% Poison & Snake Skills",
+        chakra = "+18% Chakra Regen",
+        hpRegen = "+5% HP Regen",
+        counters = "+1 Food Counter",
+        res = "+30% Poison / Ailment Resistance",
+        notes = "Orochimaru-inspired set. Massive poison immunity and regeneration."
+    },
+    ["Slithering Outfit"] = {
+        name = "Slithering Outfit",
+        hp = "+25 Max HP",
+        speed = "+12% Speed",
+        dmg = "+8% Poison",
+        chakra = "+10% Chakra Regen",
+        hpRegen = "Base",
+        counters = "Base",
+        res = "+20% Poison Resistance",
+        notes = "Slithering snake robes."
+    },
+    ["Rags"] = {
+        name = "Rags",
+        hp = "Base (+0)",
+        speed = "Base (0%)",
+        dmg = "None",
+        chakra = "Base",
+        hpRegen = "None (0x)",
+        counters = "0",
+        res = "None",
+        notes = "Starter rags. Cannot be ascended."
+    },
+    ["Zetsu Rags"] = {
+        name = "Zetsu Rags",
+        hp = "+15 Max HP",
+        speed = "+5% Speed",
+        dmg = "+5% Earth Boost",
+        chakra = "+15% Chakra Regen",
+        hpRegen = "Special (Heal on grass/burrow)",
+        counters = "0",
+        res = "+5% Earth Resistance",
+        notes = "Zetsu clan rags."
+    }
+}
+BX.ARMOR_DATA = ARMOR_DATA
+
+local ArmorCard = {
+    W = 340,
+    H = 205,
+    visible = false,
+    armorName = nil,
+    screenPos = Vector2.new(50, 120),
+    lines = {},
+}
+BX.ArmorCard = ArmorCard
+
+ArmorCard.bg = Drawing.new("Square")
+ArmorCard.bg.Filled = true
+ArmorCard.bg.Color = Color3.fromRGB(12, 16, 24)
+ArmorCard.bg.Transparency = 0.96
+ArmorCard.bg.Thickness = 1
+ArmorCard.bg.Visible = false
+
+ArmorCard.border = Drawing.new("Square")
+ArmorCard.border.Filled = false
+ArmorCard.border.Color = Color3.fromRGB(245, 185, 55)
+ArmorCard.border.Thickness = 1.5
+ArmorCard.border.Visible = false
+
+ArmorCard.header = Drawing.new("Square")
+ArmorCard.header.Filled = true
+ArmorCard.header.Color = Color3.fromRGB(22, 28, 42)
+ArmorCard.header.Transparency = 0.96
+ArmorCard.header.Thickness = 1
+ArmorCard.header.Visible = false
+
+ArmorCard.headerLine = Drawing.new("Square")
+ArmorCard.headerLine.Filled = true
+ArmorCard.headerLine.Color = Color3.fromRGB(245, 185, 55)
+ArmorCard.headerLine.Thickness = 1
+ArmorCard.headerLine.Visible = false
+
+ArmorCard.title = Drawing.new("Text")
+ArmorCard.title.Size = 13
+ArmorCard.title.Font = Drawing.Fonts.SystemBold
+ArmorCard.title.Color = Color3.fromRGB(255, 215, 75)
+ArmorCard.title.Outline = true
+ArmorCard.title.Visible = false
+
+ArmorCard.close = Drawing.new("Text")
+ArmorCard.close.Size = 12
+ArmorCard.close.Font = Drawing.Fonts.SystemBold
+ArmorCard.close.Color = Color3.fromRGB(255, 85, 85)
+ArmorCard.close.Outline = true
+ArmorCard.close.Visible = false
+
+for i = 1, 9 do
+    local txt = Drawing.new("Text")
+    txt.Size = 12
+    txt.Font = Drawing.Fonts.System
+    txt.Color = Color3.fromRGB(230, 230, 235)
+    txt.Outline = true
+    txt.Visible = false
+    ArmorCard.lines[i] = txt
+    table.insert(_G.Bloodline_ProfileDrawings, txt)
+end
+
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.bg)
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.border)
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.header)
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.headerLine)
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.title)
+table.insert(_G.Bloodline_ProfileDrawings, ArmorCard.close)
+
+function BX.getArmorStats(rawName, targetPlayer)
+    if not rawName or rawName == "" or rawName == "None" then
+        return nil
+    end
+
+    local isBroken = false
+    if targetPlayer then
+        local rs = game:GetService("ReplicatedStorage")
+        local pSet = rs:FindFirstChild("Settings") and rs.Settings:FindFirstChild(targetPlayer.Name)
+        local ab = pSet and pSet:FindFirstChild("ArmorBroken")
+        if ab and ab.Value == true then
+            isBroken = true
+        end
+        if not isBroken and targetPlayer.Character then
+            local fh = targetPlayer.Character:FindFirstChild("FakeHead")
+            if fh and fh:FindFirstChild("Armorbroken") then
+                isBroken = true
+            end
+        end
+    end
+
+    local st = ARMOR_DATA[rawName]
+    if not st then
+        local lowerName = rawName:lower()
+        for k, v in pairs(ARMOR_DATA) do
+            if k:lower() == lowerName or lowerName:find(k:lower(), 1, true) then
+                st = v
+                break
+            end
+        end
+    end
+
+    if not st then
+        local isAsc = rawName:find("Ascended") ~= nil
+        local isCloak = rawName:find("Cloak") ~= nil
+        local isKage = rawName:find("Kage") ~= nil
+        st = {
+            name = rawName,
+            hp = isKage and "+42 Max HP" or (isAsc and "+30 Max HP" or "+20 Max HP"),
+            speed = isAsc and "+20% Speed" or "+10% Speed",
+            dmg = isAsc and "+15% Jutsu/Skill Boost" or "+10% Jutsu/Skill Boost",
+            chakra = isCloak and "+15% Chakra Regen" or "+10% Chakra Regen",
+            hpRegen = "None (0x)",
+            counters = isAsc and "+1 Jump, +1 Food" or "Base",
+            res = "Standard physical resistance",
+            notes = "Dynamic lookup for " .. rawName .. "."
+        }
+    end
+
+    return st, isBroken
+end
+
+function BX.hideArmorCard()
+    ArmorCard.visible = false
+    ArmorCard.armorName = nil
+    ArmorCard.bg.Visible = false
+    ArmorCard.border.Visible = false
+    ArmorCard.header.Visible = false
+    ArmorCard.headerLine.Visible = false
+    ArmorCard.title.Visible = false
+    ArmorCard.close.Visible = false
+    for i = 1, 9 do
+        ArmorCard.lines[i].Visible = false
+    end
+end
+
+function BX.showArmorCard(armorName, targetPlayer, parentPos)
+    local st, isBroken = BX.getArmorStats(armorName, targetPlayer)
+    if not st then return end
+
+    ArmorCard.armorName = armorName
+    ArmorCard.visible = true
+
+    local posX = parentPos.X - ArmorCard.W - 12
+    local posY = parentPos.Y
+    if posX < 10 then
+        posX = parentPos.X
+        posY = parentPos.Y + Card.H + 10
+    end
+    ArmorCard.screenPos = Vector2.new(posX, posY)
+
+    ArmorCard.bg.Position = ArmorCard.screenPos
+    ArmorCard.bg.Size = Vector2.new(ArmorCard.W, ArmorCard.H)
+    ArmorCard.bg.Visible = true
+
+    ArmorCard.border.Position = ArmorCard.screenPos
+    ArmorCard.border.Size = Vector2.new(ArmorCard.W, ArmorCard.H)
+    ArmorCard.border.Visible = true
+
+    ArmorCard.header.Position = ArmorCard.screenPos
+    ArmorCard.header.Size = Vector2.new(ArmorCard.W, 26)
+    ArmorCard.header.Visible = true
+
+    ArmorCard.headerLine.Position = Vector2.new(posX, posY + 26)
+    ArmorCard.headerLine.Size = Vector2.new(ArmorCard.W, 1.5)
+    ArmorCard.headerLine.Visible = true
+
+    ArmorCard.title.Position = Vector2.new(posX + 10, posY + 6)
+    ArmorCard.title.Text = "[ARMOR STATS] " .. st.name:sub(1, 24)
+    ArmorCard.title.Visible = true
+
+    ArmorCard.close.Position = Vector2.new(posX + ArmorCard.W - 65, posY + 7)
+    ArmorCard.close.Text = "[X] Close"
+    ArmorCard.close.Visible = true
+
+    local curY = posY + 32
+
+    -- Line 1: Status (Broken vs Intact)
+    ArmorCard.lines[1].Position = Vector2.new(posX + 10, curY)
+    if isBroken then
+        ArmorCard.lines[1].Text = "• Status: ⚠ BROKEN (Defense disabled until repaired!)"
+        ArmorCard.lines[1].Color = Color3.fromRGB(255, 90, 90)
+    else
+        ArmorCard.lines[1].Text = "• Status: ✓ Intact (Active armor protection)"
+        ArmorCard.lines[1].Color = Color3.fromRGB(75, 235, 125)
+    end
+    ArmorCard.lines[1].Visible = true
+
+    curY = curY + 18
+    -- Line 2: Health
+    ArmorCard.lines[2].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[2].Text = "• Max Health Boost: " .. st.hp
+    ArmorCard.lines[2].Color = Color3.fromRGB(115, 230, 175)
+    ArmorCard.lines[2].Visible = true
+
+    curY = curY + 16
+    -- Line 3: Speed
+    ArmorCard.lines[3].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[3].Text = "• Movement Speed: " .. st.speed
+    ArmorCard.lines[3].Color = Color3.fromRGB(120, 205, 255)
+    ArmorCard.lines[3].Visible = true
+
+    curY = curY + 16
+    -- Line 4: Damage Multiplier
+    ArmorCard.lines[4].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[4].Text = "• Attack / Skill Damage: " .. st.dmg
+    ArmorCard.lines[4].Color = Color3.fromRGB(255, 205, 85)
+    ArmorCard.lines[4].Visible = true
+
+    curY = curY + 16
+    -- Line 5: Regeneration
+    ArmorCard.lines[5].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[5].Text = "• Chakra: " .. st.chakra .. "  |  HP Regen: " .. st.hpRegen
+    ArmorCard.lines[5].Color = (st.hpRegen ~= "None (0x)" and Color3.fromRGB(255, 145, 195) or Color3.fromRGB(215, 220, 235))
+    ArmorCard.lines[5].Visible = true
+
+    curY = curY + 16
+    -- Line 6: Counters & Capacity
+    ArmorCard.lines[6].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[6].Text = "• Counters: " .. st.counters
+    ArmorCard.lines[6].Color = Color3.fromRGB(220, 185, 255)
+    ArmorCard.lines[6].Visible = true
+
+    curY = curY + 16
+    -- Line 7: Resistances
+    ArmorCard.lines[7].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[7].Text = "• Resistances: " .. st.res
+    ArmorCard.lines[7].Color = Color3.fromRGB(195, 210, 235)
+    ArmorCard.lines[7].Visible = true
+
+    curY = curY + 16
+    -- Line 8: Notes / Info
+    ArmorCard.lines[8].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[8].Text = "• Info: " .. (st.notes and st.notes:sub(1, 48) or "Standard equipment")
+    ArmorCard.lines[8].Color = Color3.fromRGB(160, 175, 195)
+    ArmorCard.lines[8].Visible = true
+
+    curY = curY + 18
+    -- Line 9: Hint
+    ArmorCard.lines[9].Position = Vector2.new(posX + 10, curY)
+    ArmorCard.lines[9].Text = "Tip: Click armor line again or [X] to close"
+    ArmorCard.lines[9].Color = Color3.fromRGB(120, 130, 150)
+    ArmorCard.lines[9].Visible = true
+end
+
 function BX.hideProfileCard()
     Card.visible = false
     Card.player = nil
@@ -4234,6 +5133,9 @@ function BX.hideProfileCard()
     Card.hpFill.Visible = false
     for i = 1, 14 do
         Card.lines[i].Visible = false
+    end
+    if BX.hideArmorCard then
+        BX.hideArmorCard()
     end
 end
 
@@ -4386,6 +5288,7 @@ function BX.showProfileCard(player, charName)
     Card.screenPos = Vector2.new(posX, posY)
 
     local d = BX.fetchPlayerDetails(player)
+    Card.lastDetails = d
 
     Card.bg.Position = Card.screenPos
     Card.bg.Size = Vector2.new(Card.W, Card.H)
@@ -4442,9 +5345,11 @@ function BX.showProfileCard(player, charName)
 
     -- Row 2: Equipment (Weapon & Armor)
     lineY = lineY + 13
+    Card.armorLineY = lineY
     Card.lines[3].Position = Vector2.new(posX + 10, lineY)
-    Card.lines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. d.armor
-    Card.lines[3].Color = Color3.fromRGB(225, 230, 240)
+    local armorLabel = (d.armor and d.armor ~= "None" and d.armor ~= "") and (d.armor .. "  [🔍 View Stats]") or "None"
+    Card.lines[3].Text = "Weapon: " .. d.weapon .. "   |   Armor: " .. armorLabel
+    Card.lines[3].Color = (d.armor and d.armor ~= "None" and d.armor ~= "") and Color3.fromRGB(255, 230, 150) or Color3.fromRGB(225, 230, 240)
     Card.lines[3].Visible = true
 
     -- Row 3: Mode & Rings
@@ -4611,37 +5516,82 @@ function BX.handleLeftClick(mx, my)
         if mx >= (Card.screenPos.X + Card.W - 85) and mx <= (Card.screenPos.X + Card.W + 10)
            and my >= Card.screenPos.Y and my <= (Card.screenPos.Y + 30) then
             BX.hideProfileCard()
+            BX.hideArmorCard()
             return true
         end
     end
 
-    -- 2. Check if clicking on Leaderboard Player
+    -- 2. Check if clicking on ArmorCard Close [X] button
+    if ArmorCard.visible then
+        if mx >= (ArmorCard.screenPos.X + ArmorCard.W - 75) and mx <= (ArmorCard.screenPos.X + ArmorCard.W + 10)
+           and my >= ArmorCard.screenPos.Y and my <= (ArmorCard.screenPos.Y + 30) then
+            BX.hideArmorCard()
+            return true
+        end
+    end
+
+    -- 3. Check if clicking on the Armor line on Profile Card
+    if Card.visible and Card.player then
+        local armorY = Card.armorLineY or (Card.screenPos.Y + 68)
+        if mx >= Card.screenPos.X and mx <= (Card.screenPos.X + Card.W)
+           and my >= (armorY - 4) and my <= (armorY + 18) then
+            local d = Card.lastDetails
+            local armorName = (d and d.armor and d.armor ~= "None" and d.armor ~= "") and d.armor or nil
+            if armorName then
+                if ArmorCard.visible and ArmorCard.armorName == armorName then
+                    BX.hideArmorCard()
+                else
+                    BX.showArmorCard(armorName, Card.player, Card.screenPos)
+                end
+                return true
+            end
+        end
+    end
+
+    -- 4. Check if clicking on Leaderboard Player
     if S.bl_inspect_en ~= false then
         local p, cName = BX.getClickedLeaderboardPlayer(mx, my)
         if p then
             if Card.visible and Card.player == p then
                 -- Clicked on the same player again: toggle closed!
                 BX.hideProfileCard()
+                BX.hideArmorCard()
                 return true
             else
                 BX.showProfileCard(p, cName)
+                if ArmorCard.visible then
+                    local d = Card.lastDetails
+                    if d and d.armor and d.armor ~= "None" and d.armor ~= "" then
+                        BX.showArmorCard(d.armor, p, Card.screenPos)
+                    else
+                        BX.hideArmorCard()
+                    end
+                end
                 return true
             end
         end
     end
 
-    -- 3. If card is visible and clicking outside of card, close card ("unsee it by clicking off")
-    if Card.visible then
-        if mx < (Card.screenPos.X - 10) or mx > (Card.screenPos.X + Card.W + 10)
-           or my < (Card.screenPos.Y - 10) or my > (Card.screenPos.Y + Card.H + 10) then
-            BX.hideProfileCard()
-            return true
-        end
+    -- 5. If cards are visible and clicking outside of BOTH, close them
+    local clickedInCard = Card.visible and (mx >= (Card.screenPos.X - 10) and mx <= (Card.screenPos.X + Card.W + 10)
+                                        and my >= (Card.screenPos.Y - 10) and my <= (Card.screenPos.Y + Card.H + 10))
+    local clickedInArmor = ArmorCard.visible and (mx >= (ArmorCard.screenPos.X - 10) and mx <= (ArmorCard.screenPos.X + ArmorCard.W + 10)
+                                              and my >= (ArmorCard.screenPos.Y - 10) and my <= (ArmorCard.screenPos.Y + ArmorCard.H + 10))
+
+    if ArmorCard.visible and not clickedInArmor and not clickedInCard then
+        BX.hideArmorCard()
+    end
+
+    if Card.visible and not clickedInCard and not clickedInArmor then
+        BX.hideProfileCard()
+        BX.hideArmorCard()
+        return true
     end
     return false
 end
 
 function BX.handleXKey()
+    if ArmorCard.visible then BX.hideArmorCard() end
     if Card.visible then BX.hideProfileCard() end
 end
 
