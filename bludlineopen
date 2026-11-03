@@ -421,6 +421,19 @@ local S = {
     bl_corrupt_dest = true,
     bl_ev_pumpkin = true,
 
+    -- Dungeon Traps & Hazards
+    bl_trap_en = true,
+    bl_trap_spikes = true,
+    bl_trap_floors = true,
+    bl_trap_buttons = true,
+    bl_trap_box = true,
+    bl_trap_name = true,
+    bl_trap_dist = true,
+    bl_trap_trc = false,
+    bl_trap_max_dist = 250,
+    bl_trap_floor_chams = true,
+    bl_trap_cham_trans = 0.35,
+
     -- Event Rifts & Portals
     bl_rift_en = true,
     bl_rift_box = true,
@@ -514,6 +527,12 @@ local S = {
     bl_stamina_self = false,
 
     -- Leaderboard Inspector
+    -- Boss Predictor (Gaara & World Bosses)
+    bl_gaara_pred = true,
+    bl_gaara_hud = true,
+    bl_gaara_world = true,
+    bl_gaara_notify = true,
+    bl_gaara_hud_y = 140,
     bl_inspect_en = true,
 }
 
@@ -603,6 +622,38 @@ if ok_jdui and res_jdui then
     islCorrupt:AddToggle({ Title = "Show Distance", Flag = "bl_corrupt_dist", Default = true, Callback = function(v) S.bl_corrupt_dist = v; settingsVersion = settingsVersion + 1 end })
     islCorrupt:AddToggle({ Title = "Hide If Destroyed", Flag = "bl_corrupt_dest", Default = true, Callback = function(v) S.bl_corrupt_dest = v; settingsVersion = settingsVersion + 1 end })
     islCorrupt:AddToggle({ Title = "Pumpkin Point Notify", Flag = "bl_ev_pumpkin", Default = true, Callback = function(v) S.bl_ev_pumpkin = v; settingsVersion = settingsVersion + 1 end })
+
+    local islTrap = tabWorld:AddIsland({ Title = "Dungeon Traps & Hazards" })
+    islTrap:AddToggle({ Title = "Trap ESP Enabled", Flag = "bl_trap_en", Default = true, Callback = function(v) S.bl_trap_en = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Spike Traps", Flag = "bl_trap_spikes", Default = true, Callback = function(v) S.bl_trap_spikes = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Fake Floors (Breakable)", Flag = "bl_trap_floors", Default = true, Callback = function(v) S.bl_trap_floors = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Dungeon Buttons", Flag = "bl_trap_buttons", Default = true, Callback = function(v) S.bl_trap_buttons = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Show Boxes", Flag = "bl_trap_box", Default = true, Callback = function(v) S.bl_trap_box = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Show Names", Flag = "bl_trap_name", Default = true, Callback = function(v) S.bl_trap_name = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Show Distance", Flag = "bl_trap_dist", Default = true, Callback = function(v) S.bl_trap_dist = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Directional Tracer", Flag = "bl_trap_trc", Default = false, Callback = function(v) S.bl_trap_trc = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddToggle({ Title = "Fake Floor 3D Chams", Flag = "bl_trap_floor_chams", Default = true, Callback = function(v) S.bl_trap_floor_chams = v; settingsVersion = settingsVersion + 1 end })
+    islTrap:AddSlider({
+        Title = "Floor Cham Transparency",
+        Flag = "bl_trap_cham_trans",
+        Min = 0.1, Max = 0.8, Step = 0.05,
+        Default = 0.35,
+        Callback = function(val)
+            S.bl_trap_cham_trans = tonumber(val) or 0.35
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islTrap:AddSlider({
+        Title = "Max Trap Distance",
+        Flag = "bl_trap_max_dist",
+        Min = 50, Max = 500, Step = 10,
+        Default = 250,
+        Suffix = "m",
+        Callback = function(val)
+            S.bl_trap_max_dist = tonumber(val) or 250
+            settingsVersion = settingsVersion + 1
+        end
+    })
 
     local islRift = tabWorld:AddIsland({ Title = "Event Rifts & Portals" })
     islRift:AddToggle({ Title = "Event Portals / Rifts Enabled", Flag = "bl_rift_en", Default = true, Callback = function(v) S.bl_rift_en = v; settingsVersion = settingsVersion + 1 end })
@@ -809,6 +860,35 @@ if ok_jdui and res_jdui then
         end
     })
 
+    local islBoss = tabCombat:AddIsland({ Title = "Gaara Boss Move Predictor" })
+    islBoss:AddToggle({ Title = "Boss Predictor Enabled", Flag = "bl_gaara_pred", Default = true, Callback = function(v) S.bl_gaara_pred = v; settingsVersion = settingsVersion + 1 end })
+    islBoss:AddToggle({ Title = "Screen Warning Banner", Flag = "bl_gaara_hud", Default = true, Callback = function(v) S.bl_gaara_hud = v; settingsVersion = settingsVersion + 1 end })
+    islBoss:AddToggle({ Title = "Overhead Move Tag on Boss", Flag = "bl_gaara_world", Default = true, Callback = function(v) S.bl_gaara_world = v; settingsVersion = settingsVersion + 1 end })
+    islBoss:AddToggle({ Title = "Notification Toast Alert", Flag = "bl_gaara_notify", Default = true, Callback = function(v) S.bl_gaara_notify = v; settingsVersion = settingsVersion + 1 end })
+    islBoss:AddSlider({
+        Title = "Banner Y Position",
+        Flag = "bl_gaara_hud_y",
+        Min = 60, Max = 400, Step = 10,
+        Default = 140,
+        Suffix = " px",
+        Callback = function(v)
+            S.bl_gaara_hud_y = math.floor(tonumber(v) or 140)
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islBoss:AddButton({
+        Title = "Test Move: Sand Coffin (Grab)",
+        Callback = function()
+            if BX.triggerBossAlert then pcall(BX.triggerBossAlert, "Sand Coffin") end
+        end
+    })
+    islBoss:AddButton({
+        Title = "Test Move: Sand Tsunami (AOE)",
+        Callback = function()
+            if BX.triggerBossAlert then pcall(BX.triggerBossAlert, "Sand Tsunami") end
+        end
+    })
+
     local islInspect = tabCombat:AddIsland({ Title = "Player Profile Inspector" })
     islInspect:AddToggle({ Title = "Leaderboard Click to Inspect", Flag = "bl_inspect_en", Default = true, Callback = function(v) S.bl_inspect_en = v; settingsVersion = settingsVersion + 1 end })
     islInspect:AddButton({
@@ -835,12 +915,14 @@ local ITEM_POOL_SIZE    = 16
 local NPC_POOL_SIZE     = 8
 local CORRUPT_POOL_SIZE = 8
 local RIFT_POOL_SIZE    = 6
+local TRAP_POOL_SIZE    = 36
 
 local mobPool     = {}
 local itemPool    = {}
 local npcPool     = {}
 local corruptPool = {}
 local riftPool    = {}
+local trapPool    = {}
 
 for i = 1, MOB_POOL_SIZE do
     local box = Drawing.new("Square")
@@ -892,6 +974,34 @@ for i = 1, RIFT_POOL_SIZE do
         vis = { box = false, tag = false, tracer = false }, c = {}, line = { fx = -1, fy = -1, tx = -1, ty = -1 }, textAt = 0, owner = nil }
 end
 
+for i = 1, TRAP_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1.5; box.Filled = false; box.Visible = false
+
+    local chamFill = Drawing.new("Square")
+    chamFill.Thickness = 0; chamFill.Filled = true; chamFill.Transparency = 0.35; chamFill.Visible = false
+
+    local chamQuad = Drawing.new("Quad")
+    chamQuad.Thickness = 0; chamQuad.Filled = true; chamQuad.Transparency = 0.35; chamQuad.Visible = false
+
+    local chamQuadOut = Drawing.new("Quad")
+    chamQuadOut.Thickness = 2; chamQuadOut.Filled = false; chamQuadOut.Visible = false
+
+    local tag = Drawing.new("Text")
+    tag.Size = 13; tag.Font = Drawing.Fonts.SystemBold; tag.Center = true; tag.Outline = true; tag.Visible = false
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1.2; tracer.Visible = false
+
+    box.Color = Color3.fromRGB(255, 45, 45)
+    tag.Color = Color3.fromRGB(255, 140, 140)
+    tracer.Color = Color3.fromRGB(255, 45, 45)
+
+    trapPool[i] = { box = box, chamFill = chamFill, chamQuad = chamQuad, chamQuadOut = chamQuadOut,
+        tag = tag, tracer = tracer, isShown = false, lastText = "",
+        vis = { box = false, tag = false, tracer = false }, c = {}, line = { fx = -1, fy = -1, tx = -1, ty = -1 }, textAt = 0, owner = nil }
+end
+
 for i = 1, NPC_POOL_SIZE do
     local box = Drawing.new("Square")
     box.Thickness = 1.5; box.Filled = false; box.Visible = false
@@ -934,6 +1044,184 @@ csHudContent.Color = Color3.fromRGB(240, 240, 240)
 csHudContent.Outline = true
 csHudContent.Visible = false
 csHudContent.Position = Vector2.new(16, 238)
+
+-- ============================================================
+--  GAARA BOSS MOVE PREDICTOR & COUNTER SYSTEM
+-- ============================================================
+local GAARA_MOVE_DB = {
+    ["sand coffin"] = {
+        name = "SAND COFFIN",
+        choice = ">> SUB / DODGE NOW! DO NOT BLOCK! <<",
+        type = "GRAB / GUARDBREAK",
+        col = Color3.fromRGB(255, 45, 45),
+        ttl = 3.5,
+    },
+    ["grand sand masoleum"] = {
+        name = "GRAND SAND MAUSOLEUM",
+        choice = ">> SUB IMMEDIATELY! SPRINT OUT OF RING! <<",
+        type = "LETHAL BURIAL AOE",
+        col = Color3.fromRGB(255, 15, 15),
+        ttl = 4.2,
+    },
+    ["sand masoleum"] = {
+        name = "SAND MAUSOLEUM",
+        choice = ">> SUB IMMEDIATELY! SPRINT OUT OF RING! <<",
+        type = "BURIAL AOE",
+        col = Color3.fromRGB(255, 30, 30),
+        ttl = 3.8,
+    },
+    ["sand tsunami"] = {
+        name = "SAND TSUNAMI",
+        choice = ">> DOUBLE JUMP / AERIAL HIGH GROUND! <<",
+        type = "GROUND WAVE AOE",
+        col = Color3.fromRGB(255, 140, 20),
+        ttl = 3.8,
+    },
+    ["quicksand"] = {
+        name = "QUICKSAND",
+        choice = ">> JUMP OUT / SPRINT AWAY FROM AREA! <<",
+        type = "SLOWING GROUND TRAP",
+        col = Color3.fromRGB(235, 180, 25),
+        ttl = 3.5,
+    },
+    ["sand suspension"] = {
+        name = "SAND SUSPENSION",
+        choice = ">> HOLD BLOCK / AIR DODGE EXPLOSION! <<",
+        type = "AERIAL BLAST",
+        col = Color3.fromRGB(0, 225, 255),
+        ttl = 3.0,
+    },
+    ["sand shield"] = {
+        name = "SAND SHIELD",
+        choice = ">> CEASE ATTACKING! DO NOT HIT SPIKES! <<",
+        type = "REFLECT COUNTER",
+        col = Color3.fromRGB(255, 215, 0),
+        ttl = 4.0,
+    },
+    ["sand barrage"] = {
+        name = "SAND BARRAGE",
+        choice = ">> HOLD BLOCK / PARRY CONTINUOUSLY! <<",
+        type = "RAPID PROJECTILES",
+        col = Color3.fromRGB(255, 190, 40),
+        ttl = 3.2,
+    },
+    ["iron sand boulder"] = {
+        name = "IRON SAND BOULDER",
+        choice = ">> DODGE / ROLL SIDEWAYS OUT OF LINE! <<",
+        type = "HEAVY BOULDER",
+        col = Color3.fromRGB(210, 70, 210),
+        ttl = 3.0,
+    },
+    ["big sand slash"] = {
+        name = "BIG SAND SLASH",
+        choice = ">> PARRY / BLOCK / STEP BACK! <<",
+        type = "HEAVY MELEE COMBO",
+        col = Color3.fromRGB(255, 160, 60),
+        ttl = 2.5,
+    },
+    ["sand slash"] = {
+        name = "SAND SLASH",
+        choice = ">> BLOCK / PARRY MELEE! <<",
+        type = "MELEE ATTACK",
+        col = Color3.fromRGB(255, 175, 75),
+        ttl = 2.2,
+    },
+    ["burrow"] = {
+        name = "BURROW (UNDERGROUND)",
+        choice = ">> SPRINT AWAY / KEEP MOVING! <<",
+        type = "UNTOUCHABLE AMBUSH",
+        col = Color3.fromRGB(210, 190, 130),
+        ttl = 3.5,
+    },
+    ["inground"] = {
+        name = "IN GROUND (UNDERGROUND)",
+        choice = ">> SPRINT AWAY / KEEP MOVING! <<",
+        type = "UNTOUCHABLE AMBUSH",
+        col = Color3.fromRGB(210, 190, 130),
+        ttl = 3.5,
+    },
+    ["sand reflex"] = {
+        name = "SAND REFLEX (DODGE)",
+        choice = ">> DO NOT WHIFF / RESET POSITION! <<",
+        type = "AUTO EVASION",
+        col = Color3.fromRGB(120, 200, 255),
+        ttl = 2.5,
+    },
+}
+
+local BossHUD = {
+    bg = Drawing.new("Square"),
+    border = Drawing.new("Square"),
+    title = Drawing.new("Text"),
+    choice = Drawing.new("Text"),
+    timer = Drawing.new("Text"),
+    tag = Drawing.new("Text"),
+    tagBox = Drawing.new("Square"),
+    activeAlert = nil,
+    lastSkill = "",
+    lastTriggerAt = -100,
+    lastBurrow = false,
+    cachedBoss = nil,
+    cachedSettings = nil,
+    cachedSkillVal = nil,
+    cachedBurrowVal = nil,
+    cachedInGroundVal = nil,
+    cachedRoot = nil,
+    cachedHum = nil,
+    lastBossCheck = -100,
+    seenDebris = {},
+}
+BossHUD.bg.Filled = true
+BossHUD.bg.Color = Color3.fromRGB(10, 10, 15)
+BossHUD.bg.Transparency = 0.25
+BossHUD.bg.ZIndex = 10
+BossHUD.bg.Visible = false
+
+BossHUD.border.Thickness = 2
+BossHUD.border.Filled = false
+BossHUD.border.Color = Color3.fromRGB(255, 50, 50)
+BossHUD.border.ZIndex = 11
+BossHUD.border.Visible = false
+
+BossHUD.title.Size = 16
+BossHUD.title.Font = Drawing.Fonts.SystemBold
+BossHUD.title.Center = true
+BossHUD.title.Outline = true
+BossHUD.title.Color = Color3.fromRGB(255, 60, 60)
+BossHUD.title.ZIndex = 12
+BossHUD.title.Visible = false
+
+BossHUD.choice.Size = 14
+BossHUD.choice.Font = Drawing.Fonts.SystemBold
+BossHUD.choice.Center = true
+BossHUD.choice.Outline = true
+BossHUD.choice.Color = Color3.fromRGB(255, 240, 90)
+BossHUD.choice.ZIndex = 12
+BossHUD.choice.Visible = false
+
+BossHUD.timer.Size = 11
+BossHUD.timer.Font = Drawing.Fonts.System
+BossHUD.timer.Center = true
+BossHUD.timer.Outline = true
+BossHUD.timer.Color = Color3.fromRGB(190, 200, 215)
+BossHUD.timer.ZIndex = 12
+BossHUD.timer.Visible = false
+
+BossHUD.tagBox.Filled = true
+BossHUD.tagBox.Color = Color3.fromRGB(12, 12, 16)
+BossHUD.tagBox.Transparency = 0.65
+BossHUD.tagBox.ZIndex = 2
+BossHUD.tagBox.Visible = false
+
+BossHUD.tag.Size = 14
+BossHUD.tag.Font = Drawing.Fonts.SystemBold
+BossHUD.tag.Center = true
+BossHUD.tag.Outline = true
+BossHUD.tag.Color = Color3.fromRGB(255, 60, 60)
+BossHUD.tag.ZIndex = 3
+BossHUD.tag.Visible = false
+
+_G.Bloodline_BossHUD = BossHUD
 
 -- Jutsu Overhead Tag State
 local JutsuRadar = {
@@ -1114,6 +1402,17 @@ local function hideRiftSlot(s)
     setVis(s, "tracer", false)
 end
 
+local function hideTrapSlot(s)
+    if not s or not s.isShown then return end
+    s.isShown = false
+    setVis(s, "box", false)
+    setVis(s, "tag", false)
+    setVis(s, "tracer", false)
+    if s.chamFill then s.chamFill.Visible = false end
+    if s.chamQuad then s.chamQuad.Visible = false end
+    if s.chamQuadOut then s.chamQuadOut.Visible = false end
+end
+
 local function hideNPCSlot(s)
     if not s or not s.isShown then return end
     s.isShown = false
@@ -1158,6 +1457,7 @@ end
 _G.Bloodline_mobPool     = mobPool
 _G.Bloodline_corruptPool = corruptPool
 _G.Bloodline_riftPool    = riftPool
+_G.Bloodline_trapPool    = trapPool
 _G.Bloodline_npcPool     = npcPool
 _G.Bloodline_itemPool    = itemPool
 _G.Bloodline_csHudTitle  = csHudTitle
@@ -1259,6 +1559,17 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_csHudContent = nil
     end
 
+    if _G.Bloodline_BossHUD then
+        safeRemove(_G.Bloodline_BossHUD.bg)
+        safeRemove(_G.Bloodline_BossHUD.border)
+        safeRemove(_G.Bloodline_BossHUD.title)
+        safeRemove(_G.Bloodline_BossHUD.choice)
+        safeRemove(_G.Bloodline_BossHUD.timer)
+        safeRemove(_G.Bloodline_BossHUD.tag)
+        safeRemove(_G.Bloodline_BossHUD.tagBox)
+        _G.Bloodline_BossHUD = nil
+    end
+
     if _G.Bloodline_JutsuRadar and _G.Bloodline_JutsuRadar.tags then
         for i = 1, #_G.Bloodline_JutsuRadar.tags do
             local it = _G.Bloodline_JutsuRadar.tags[i]
@@ -1336,6 +1647,13 @@ _G.Bloodline_cleanup = function()
             safeRemove(s.box); safeRemove(s.tag); safeRemove(s.tracer)
         end
         _G.Bloodline_riftPool = nil
+    end
+
+    if _G.Bloodline_trapPool then
+        for _, s in ipairs(_G.Bloodline_trapPool) do
+            safeRemove(s.box); safeRemove(s.tag); safeRemove(s.tracer); safeRemove(s.chamFill); safeRemove(s.chamQuad); safeRemove(s.chamQuadOut)
+        end
+        _G.Bloodline_trapPool = nil
     end
 
     if _G.Bloodline_npcPool then
@@ -1443,7 +1761,7 @@ local COL_ITEM_DEFAULT = Color3.fromRGB(0, 255, 120)
 -- ============================================================
 --  SHARED STATE
 -- ============================================================
-local trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
+local trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems, trackedTraps = {}, {}, {}, {}, {}, {}
 local trackedChakraUsers, trackedChakraText, trackedChakraTitle, trackedChakraCount = {}, "", "", 0
 local trackedBeastTamer = nil
 
@@ -2072,7 +2390,7 @@ end
 
 local tickCount = 0
 local function updateActiveCasts()
-    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en
+    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en or S.bl_gaara_pred
     if not combatActive then
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
         return
@@ -2099,6 +2417,9 @@ local function updateActiveCasts()
     else
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
     end
+    if S.bl_gaara_pred and BX.checkGaaraBoss then
+        pcall(BX.checkGaaraBoss, now)
+    end
     sectionPurge(os.clock())
 end
 
@@ -2121,7 +2442,7 @@ BX.startDet = function()
             end
 
             local delay = CYCLE_OFF
-            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en then
+            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en or S.bl_gaara_pred then
                 if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
                     delay = CYCLE_ACTIVE
                 else
@@ -2191,7 +2512,7 @@ end
 -- Per-pass state (assigned at the start of every pass, read by processObject)
 local P_now, P_myPos, P_myName = 0, Vector3.new(0, 0, 0), ""
 local P_playerNames, P_playerChars = {}, {}
-local P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems = {}, {}, {}, {}, {}, {}
+local P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems, P_freshTraps = {}, {}, {}, {}, {}, {}, {}
 local P_liveItemAddrs, P_liveBeastKeys, P_livePumpkinKeys, P_liveRiftAddrs = {}, {}, {}, {}
 local P_freshBeastTamer = nil
 local P_needMobs = false
@@ -2297,6 +2618,93 @@ end
 
 -- Classifies ONE Workspace child.
 -- Hardened against freed/despawned instances to prevent C++ memory walker deadlocks in Matcha.
+local seenTraps = {}
+
+local function processTrap(obj, kind)
+    if not obj or not S.bl_trap_en then return end
+    if seenTraps[obj] then return end
+    seenTraps[obj] = true
+
+    if kind == "Spike" and not S.bl_trap_spikes then return end
+    if kind == "FakeFloor" and not S.bl_trap_floors then return end
+    if kind == "Button" and not S.bl_trap_buttons then return end
+
+    local p = nil
+    local isBroken = false
+    local isActivated = false
+    local tName = "Trap"
+    local c1, c2, c3, c4 = nil, nil, nil, nil
+    local szX, szZ = 5, 5
+
+    if kind == "Spike" then
+        local hb = obj:FindFirstChild("Hitbox")
+        local main = obj:FindFirstChild("Main")
+        p = (hb and hb.Position) or (main and main.Position)
+        if not p then
+            local bp = obj:FindFirstChildWhichIsA("BasePart")
+            if bp then p = bp.Position end
+        end
+        tName = "Spike Trap"
+    elseif kind == "FakeFloor" then
+        local bp = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
+        if bp then
+            p = bp.Position
+            local cf = bp.CFrame
+            local sz = bp.Size
+            szX, szZ = sz.X, sz.Z
+            local hx, hy, hz = sz.X * 0.5, sz.Y * 0.5, sz.Z * 0.5
+            c1 = (cf * CFrame.new(-hx, hy, -hz)).Position
+            c2 = (cf * CFrame.new( hx, hy, -hz)).Position
+            c3 = (cf * CFrame.new( hx, hy,  hz)).Position
+            c4 = (cf * CFrame.new(-hx, hy,  hz)).Position
+        end
+        local act = obj:FindFirstChild("Active")
+        if act and act:IsA("BoolValue") then
+            isBroken = (act.Value == true)
+        end
+        local oName = tostring(obj.Name or "")
+        if oName:find("Clay") then
+            tName = "Clay Trap Floor"
+        elseif oName:find("Poison") then
+            tName = "Poison Floor"
+        else
+            tName = "Fake Floor"
+        end
+    elseif kind == "Button" then
+        local actPart = obj:FindFirstChild("ActivationButton") or obj:FindFirstChild("Main")
+        p = actPart and actPart.Position
+        if not p then
+            local bp = obj:FindFirstChildWhichIsA("BasePart")
+            if bp then p = bp.Position end
+        end
+        local act = obj:FindFirstChild("Activated")
+        if act and act:IsA("BoolValue") then
+            isActivated = (act.Value == true)
+        end
+        tName = obj.Name or "Button"
+    end
+
+    if not p or not isValidVec3(p) then return end
+    local dist = (P_myPos - p).Magnitude
+    if dist > (S.bl_trap_max_dist or 250) then return end
+
+    P_freshTraps[#P_freshTraps + 1] = {
+        inst = obj,
+        kind = kind,
+        pos = p,
+        dist = dist,
+        name = tName,
+        isBroken = isBroken,
+        isActivated = isActivated,
+        c1 = c1,
+        c2 = c2,
+        c3 = c3,
+        c4 = c4,
+        szX = szX or 5,
+        szZ = szZ or 5,
+    }
+end
+
 local function processObject(obj)
     if not obj then return end
 
@@ -2324,6 +2732,39 @@ local function processObject(obj)
                     pcall(processRift, sub)
                 end
             end
+        end
+        if fName == "GaaraParkour" or fName:find("Parkour") then
+            local plats = obj:FindFirstChild("Platforms")
+            if plats then
+                local pk = plats:GetChildren()
+                for j = 1, #pk do
+                    local sub = pk[j]
+                    if sub then
+                        local sp = sub:FindFirstChild("SecretPlate")
+                        if sub.Name == "BreakableDungeon" or (sp and sp.Value == "BreakFloor") then
+                            pcall(processTrap, sub, "FakeFloor")
+                        elseif sub:IsA("Model") then
+                            for _, sub2 in ipairs(sub:GetChildren()) do
+                                local sp2 = sub2:FindFirstChild("SecretPlate")
+                                if sub2.Name == "BreakableDungeon" or (sp2 and sp2.Value == "BreakFloor") then
+                                    pcall(processTrap, sub2, "FakeFloor")
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            local btns = obj:FindFirstChild("Buttons")
+            if btns then
+                local bk = btns:GetChildren()
+                for j = 1, #bk do
+                    local sub = bk[j]
+                    if sub then
+                        pcall(processTrap, sub, "Button")
+                    end
+                end
+            end
+            return
         end
         return
     end
@@ -2360,6 +2801,30 @@ local function processObject(obj)
     if nu and nu > P_now and negName[addr] == objName then return end
 
     local isModel = (cname == "Model")
+
+    -- DUNGEON TRAPS & HAZARDS
+    if isModel and (objName == "NewSpikesTrap" or string.find(string.lower(objName), "spike", 1, true)) then
+        pcall(processTrap, obj, "Spike")
+        return
+    end
+
+    if objName == "BreakableDungeon" or string.find(objName, "ClayActivationFloor", 1, true) or (isModel and string.find(objName, "BreakFloor", 1, true)) then
+        pcall(processTrap, obj, "FakeFloor")
+        return
+    end
+
+    if string.find(objName, "GaaraButton", 1, true) then
+        pcall(processTrap, obj, "Button")
+        return
+    end
+
+    -- Container Models in Workspace (e.g. Workspace.Model containing NewSpikesTrap)
+    if isModel and (objName == "Model" or string.find(objName, "Trap", 1, true)) then
+        local spk = obj:FindFirstChild("NewSpikesTrap")
+        if spk then
+            pcall(processTrap, spk, "Spike")
+        end
+    end
 
     -- 4. SPECIAL EVENT: Beast Tamer
     if isModel and string.find(string.lower(objName), "beast tamer", 1, true) then
@@ -2722,7 +3187,8 @@ local function runScanPass()
     P_myPos      = lastMyPos
     P_myName     = lp and lp.Name or ""
     P_playerNames, P_playerChars = {}, {}
-    P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems = {}, {}, {}, {}, {}, {}
+    P_freshCands, P_freshMobs, P_freshNPCs, P_freshCorrupt, P_freshRifts, P_freshItems, P_freshTraps = {}, {}, {}, {}, {}, {}, {}
+    seenTraps = {}
     P_liveItemAddrs, P_liveBeastKeys, P_livePumpkinKeys, P_liveRiftAddrs = {}, {}, {}, {}
     P_freshBeastTamer = nil
 
@@ -2792,7 +3258,9 @@ local function runScanPass()
     table.sort(P_freshCands, byDist)
     capList(P_freshNPCs, NPC_POOL_SIZE)
     capList(P_freshCorrupt, CORRUPT_POOL_SIZE)
+    table.sort(P_freshTraps, byDist)
     capList(P_freshRifts, RIFT_POOL_SIZE)
+    capList(P_freshTraps, TRAP_POOL_SIZE)
     capList(P_freshItems, ITEM_LIST_CAP)
 
     -- Drop per-mob caches of things that no longer exist
@@ -2832,6 +3300,7 @@ local function runScanPass()
     trackedNPCs       = P_freshNPCs
     trackedCorrupt    = P_freshCorrupt
     trackedRifts      = P_freshRifts
+    trackedTraps      = P_freshTraps
     trackedItems      = P_freshItems
     trackedBeastTamer = P_freshBeastTamer
     drawDirty         = true
@@ -2881,6 +3350,19 @@ BX.startDeb = function()
                         table.insert(BX.debrisRifts, child)
                         if S.bl_rift_notify then
                             notify("PORTAL DETECTED!", string.format("%s spawned!", cName), 10)
+                        end
+                    elseif okN and S.bl_gaara_pred and BX.triggerBossAlert then
+                        local l = cName:lower()
+                        if l:find("sand coffin") then
+                            BX.triggerBossAlert("Sand Coffin")
+                        elseif l:find("big sand slash") then
+                            BX.triggerBossAlert("Big Sand Slash")
+                        elseif l:find("sand shield") or l:find("sandshield") then
+                            BX.triggerBossAlert("Sand Shield")
+                        elseif l:find("sand masoleum") or l:find("sandmasoleum") then
+                            BX.triggerBossAlert("Sand Masoleum")
+                        elseif l:find("sand tsunami") or l:find("sandpit") then
+                            BX.triggerBossAlert("Sand Tsunami")
                         end
                     end
                 end
@@ -3331,6 +3813,214 @@ function BX.renderRifts()
 end
 
 -- ---------------- TOWN & FRIENDLY NPCS ----------------
+-- ---------------- DUNGEON TRAPS & HAZARDS ----------------
+local function drawTrapEntity(e, t)
+    local inst = t.inst
+    if inst then
+        local okP, par = pcall(function() return inst.Parent end)
+        if not okP or not par then return false end
+    end
+    if not t or not t.pos or not isValidVec3(t.pos) then return false end
+    local pos = t.pos
+    local dist = (rCamPos - pos).Magnitude
+    if dist <= 0.5 then return false end
+
+    local okS, sp, onScreen = pcall(WorldToScreen, pos)
+    if not okS or not isValidVec2(sp) then return false end
+
+    e.isShown = true
+
+    local boxCol = BX.RGB(255, 45, 45)
+    local tagCol = BX.RGB(255, 140, 140)
+    local nameStr = "[SPIKE TRAP]"
+
+    if t.kind == "FakeFloor" then
+        if t.name:find("Clay") then
+            boxCol = BX.RGB(240, 140, 20)
+            tagCol = BX.RGB(255, 190, 80)
+            nameStr = "[CLAY TRAP FLOOR]"
+        elseif t.name:find("Poison") then
+            boxCol = BX.RGB(190, 60, 240)
+            tagCol = BX.RGB(230, 140, 255)
+            nameStr = "[POISON FLOOR]"
+        elseif t.isBroken then
+            boxCol = BX.RGB(130, 80, 80)
+            tagCol = BX.RGB(180, 140, 140)
+            nameStr = "[BROKEN FLOOR]"
+        else
+            boxCol = BX.RGB(255, 140, 0)
+            tagCol = BX.RGB(255, 205, 80)
+            nameStr = "[FAKE FLOOR]"
+        end
+    elseif t.kind == "Button" then
+        if t.isActivated then
+            boxCol = BX.RGB(40, 220, 100)
+            tagCol = BX.RGB(120, 255, 160)
+            nameStr = "[" .. (t.name or "BUTTON") .. " - ON]"
+        else
+            boxCol = BX.RGB(0, 200, 255)
+            tagCol = BX.RGB(140, 230, 255)
+            nameStr = "[" .. (t.name or "BUTTON") .. " - OFF]"
+        end
+    end
+
+    local tagY = sp.Y - 20
+
+    -- ---------------- FAKE FLOOR 3D CHAMS & HIGHLIGHT ----------------
+    if t.kind == "FakeFloor" and t.c1 then
+        local p1, on1 = WorldToScreen(t.c1)
+        local p2, on2 = WorldToScreen(t.c2)
+        local p3, on3 = WorldToScreen(t.c3)
+        local p4, on4 = WorldToScreen(t.c4)
+
+        local enableChams = S.bl_trap_floor_chams ~= false
+        local chamTrans = S.bl_trap_cham_trans or 0.35
+
+        if on1 and on2 and on3 and on4 and enableChams then
+            -- Exact 3D perspective surface cham covering the whole floor!
+            e.chamQuad.PointA = p1
+            e.chamQuad.PointB = p2
+            e.chamQuad.PointC = p3
+            e.chamQuad.PointD = p4
+            if e.cqColS ~= boxCol then e.chamQuad.Color = boxCol; e.cqColS = boxCol end
+            e.chamQuad.Transparency = chamTrans
+            e.chamQuad.Visible = true
+
+            e.chamQuadOut.PointA = p1
+            e.chamQuadOut.PointB = p2
+            e.chamQuadOut.PointC = p3
+            e.chamQuadOut.PointD = p4
+            if e.cqoColS ~= boxCol then e.chamQuadOut.Color = boxCol; e.cqoColS = boxCol end
+            e.chamQuadOut.Visible = true
+
+            setVis(e, "box", false)
+            if e.chamFill.Visible then e.chamFill.Visible = false end
+
+            tagY = math.min(p1.Y, p2.Y, p3.Y, p4.Y) - 18
+        else
+            if e.chamQuad.Visible then e.chamQuad.Visible = false end
+            if e.chamQuadOut.Visible then e.chamQuadOut.Visible = false end
+
+            if onScreen then
+                local rawW = (t.szX / (dist * rTan)) * rVpH
+                local rawH = (t.szZ / (dist * rTan)) * rVpH
+                if isValidNum(rawW) and isValidNum(rawH) then
+                    local w = clamp(floor(rawW), 14, 800)
+                    local h = clamp(floor(rawH), 14, 600)
+                    local boxX = floor(sp.X - floor(w * 0.5))
+                    local boxY = floor(sp.Y - floor(h * 0.5))
+                    tagY = boxY - 18
+
+                    if S.bl_trap_box then
+                        place(e, "box", boxX, boxY)
+                        sizeIt(e, "box", w, h)
+                        if e.trapBoxS ~= boxCol then e.box.Color = boxCol; e.trapBoxS = boxCol end
+                        setVis(e, "box", true)
+                    else
+                        setVis(e, "box", false)
+                    end
+
+                    if enableChams then
+                        place(e, "chamFill", boxX, boxY)
+                        sizeIt(e, "chamFill", w, h)
+                        if e.cfColS ~= boxCol then e.chamFill.Color = boxCol; e.cfColS = boxCol end
+                        e.chamFill.Transparency = chamTrans
+                        if not e.chamFill.Visible then e.chamFill.Visible = true end
+                    else
+                        if e.chamFill.Visible then e.chamFill.Visible = false end
+                    end
+                else
+                    setVis(e, "box", false)
+                    if e.chamFill.Visible then e.chamFill.Visible = false end
+                end
+            else
+                setVis(e, "box", false)
+                if e.chamFill.Visible then e.chamFill.Visible = false end
+            end
+        end
+    else
+        -- ---------------- SPIKE TRAPS & BUTTONS ----------------
+        if e.chamQuad.Visible then e.chamQuad.Visible = false end
+        if e.chamQuadOut.Visible then e.chamQuadOut.Visible = false end
+        if e.chamFill.Visible then e.chamFill.Visible = false end
+
+        if onScreen then
+            local rawH = (4.0 / (dist * rTan)) * rVpH
+            if isValidNum(rawH) then
+                local h = clamp(floor(rawH), 14, 400)
+                local w = clamp(floor(h * 1.3), 14, 450)
+                local boxX = floor(sp.X - floor(w * 0.5))
+                local boxY = floor(sp.Y - floor(h * 0.5))
+                tagY = boxY - 16
+
+                if S.bl_trap_box then
+                    place(e, "box", boxX, boxY)
+                    sizeIt(e, "box", w, h)
+                    if e.trapBoxS ~= boxCol then e.box.Color = boxCol; e.trapBoxS = boxCol end
+                    setVis(e, "box", true)
+                else
+                    setVis(e, "box", false)
+                end
+            else
+                setVis(e, "box", false)
+            end
+        else
+            setVis(e, "box", false)
+        end
+    end
+
+    -- Text Tag
+    local showName, showDist = S.bl_trap_name, S.bl_trap_dist
+    if (showName or showDist) and onScreen then
+        if e.owner ~= t then e.owner = t; e.textAt = 0 end
+        if rNow - e.textAt >= TEXT_INTERVAL then
+            e.textAt = rNow
+            local label = ""
+            if showName and showDist then
+                label = nameStr .. " [" .. floor(dist) .. "m]"
+            elseif showName then
+                label = nameStr
+            else
+                label = "[" .. floor(dist) .. "m]"
+            end
+            if label ~= e.lastText then
+                e.tag.Text = label
+                e.lastText = label
+            end
+        end
+        if e.tagColS ~= tagCol then e.tag.Color = tagCol; e.tagColS = tagCol end
+        place(e, "tag", floor(sp.X), floor(tagY))
+        setVis(e, "tag", true)
+    else
+        setVis(e, "tag", false)
+    end
+
+    -- Directional Tracer
+    if S.bl_trap_trc and rBotX and rBotY and onScreen then
+        setLine(e, rBotX, rBotY, floor(sp.X), floor(sp.Y))
+        if e.trapTrS ~= boxCol then e.tracer.Color = boxCol; e.trapTrS = boxCol end
+        setVis(e, "tracer", true)
+    else
+        setVis(e, "tracer", false)
+    end
+
+    return true
+end
+
+function BX.renderTraps()
+    local count = 0
+    if S.bl_trap_en then
+        local list = trackedTraps
+        count = #list
+        if count > TRAP_POOL_SIZE then count = TRAP_POOL_SIZE end
+        for i = 1, count do
+            local e = trapPool[i]
+            if not drawTrapEntity(e, list[i]) then hideTrapSlot(e) end
+        end
+    end
+    for i = count + 1, TRAP_POOL_SIZE do hideTrapSlot(trapPool[i]) end
+end
+
 local function drawNPCEntity(e, n)
     if not n or not n.root then return false end
     local okP, rPos = pcall(getPosOf, n.root)
@@ -4284,6 +4974,222 @@ function BX.renderStaminaTags()
     end
     BX.hideStaminaTags(count + 1)
 end
+-- ============================================================
+--  GAARA BOSS MOVE PREDICTOR ENGINE
+-- ============================================================
+function BX.triggerBossAlert(rawMoveName, bossRootOverride)
+    if not S.bl_gaara_pred then return end
+    if type(rawMoveName) ~= "string" or #rawMoveName == 0 then return end
+    local lName = rawMoveName:lower()
+    local info = nil
+    for k, v in pairs(GAARA_MOVE_DB) do
+        if lName == k or lName:find(k, 1, true) then
+            info = v
+            break
+        end
+    end
+    if not info then
+        info = {
+            name = rawMoveName:upper(),
+            choice = ">> PREPARE REACTION: BLOCK OR SUB / DODGE! <<",
+            type = "BOSS JUTSU",
+            col = Color3.fromRGB(255, 220, 80),
+            ttl = 3.2,
+        }
+    end
+
+    local now = os.clock()
+    BossHUD.activeAlert = {
+        name = info.name,
+        choice = info.choice,
+        type = info.type,
+        col = info.col,
+        expire = now + (info.ttl or 3.5),
+        startAt = now,
+        root = bossRootOverride or BossHUD.cachedRoot,
+    }
+
+    if S.bl_gaara_notify and notify then
+        notify("GAARA BOSS MOVE!", string.format("%s [%s]\n%s", info.name, info.type, info.choice), 4)
+    end
+end
+
+function BX.checkGaaraBoss(now)
+    if not S.bl_gaara_pred then return end
+
+    -- Re-resolve boss if cached reference is stale
+    local b = BossHUD.cachedBoss
+    local hum = BossHUD.cachedHum
+    if not (b and b.Parent == Workspace and hum and isAliveHum(hum)) then
+        BossHUD.cachedBoss = nil
+        BossHUD.cachedSettings = nil
+        BossHUD.cachedSkillVal = nil
+        BossHUD.cachedBurrowVal = nil
+        BossHUD.cachedInGroundVal = nil
+        BossHUD.cachedRoot = nil
+        BossHUD.cachedHum = nil
+
+        if (now - BossHUD.lastBossCheck) > 2.0 then
+            BossHUD.lastBossCheck = now
+            local g = Workspace:FindFirstChild("Hallowed Gaara")
+            if g then
+                BossHUD.cachedBoss = g
+                local s = g:FindFirstChild("Settings")
+                BossHUD.cachedSettings = s
+                BossHUD.cachedSkillVal = s and s:FindFirstChild("CurrentSkill")
+                BossHUD.cachedBurrowVal = s and s:FindFirstChild("Burrowing")
+                BossHUD.cachedInGroundVal = s and s:FindFirstChild("InGround")
+                BossHUD.cachedRoot = g:FindFirstChild("HumanoidRootPart") or g:FindFirstChild("Torso") or g:FindFirstChildOfClass("BasePart")
+                BossHUD.cachedHum = g:FindFirstChildOfClass("Humanoid")
+            end
+        end
+    end
+
+    -- If boss is active, check skills and state
+    if BossHUD.cachedBoss then
+        local root = BossHUD.cachedRoot
+        if not root or not root.Parent then
+            BossHUD.cachedRoot = BossHUD.cachedBoss:FindFirstChild("HumanoidRootPart") or BossHUD.cachedBoss:FindFirstChild("Torso")
+        end
+
+        -- 1. Check CurrentSkill Value
+        if BossHUD.cachedSkillVal then
+            local ok, rawSkill = pcall(getValue, BossHUD.cachedSkillVal)
+            if ok and type(rawSkill) == "string" and rawSkill ~= "" and rawSkill ~= "None" then
+                if rawSkill ~= BossHUD.lastSkill or (now - BossHUD.lastTriggerAt) > 3.0 then
+                    BossHUD.lastSkill = rawSkill
+                    BossHUD.lastTriggerAt = now
+                    BX.triggerBossAlert(rawSkill, BossHUD.cachedRoot)
+                end
+            else
+                BossHUD.lastSkill = ""
+            end
+        end
+
+        -- 2. Check Burrowing / InGround state
+        local isBurrow = false
+        if BossHUD.cachedBurrowVal then
+            local ok, bv = pcall(getValue, BossHUD.cachedBurrowVal)
+            if ok and bv == true then isBurrow = true end
+        end
+        if not isBurrow and BossHUD.cachedInGroundVal then
+            local ok, gv = pcall(getValue, BossHUD.cachedInGroundVal)
+            if ok and gv == true then isBurrow = true end
+        end
+        if isBurrow then
+            if not BossHUD.lastBurrow then
+                BossHUD.lastBurrow = true
+                BX.triggerBossAlert("Burrow", BossHUD.cachedRoot)
+            end
+        else
+            BossHUD.lastBurrow = false
+        end
+    end
+
+    -- (Debris move spawns handled via 0ms ChildAdded event in BX.startDeb with zero polling overhead)
+end
+
+function BX.hideBossPredictor()
+    if BossHUD.bg.Visible then BossHUD.bg.Visible = false end
+    if BossHUD.border.Visible then BossHUD.border.Visible = false end
+    if BossHUD.title.Visible then BossHUD.title.Visible = false end
+    if BossHUD.choice.Visible then BossHUD.choice.Visible = false end
+    if BossHUD.timer.Visible then BossHUD.timer.Visible = false end
+    if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
+    if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
+end
+
+function BX.renderGaaraBossPredictor()
+    if not S.bl_gaara_pred then
+        BX.hideBossPredictor()
+        return
+    end
+
+
+    local alert = BossHUD.activeAlert
+    if not alert or rNow >= alert.expire then
+        BossHUD.activeAlert = nil
+        BX.hideBossPredictor()
+        return
+    end
+
+    local cam = Workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize
+    if not vp or vp.X < 50 or vp.Y < 50 then
+        BX.hideBossPredictor()
+        return
+    end
+
+    -- 1. Render Screen Warning Banner HUD
+    if S.bl_gaara_hud then
+        local hudY = S.bl_gaara_hud_y or 140
+        local bannerW = 460
+        local bannerH = 56
+        local bannerX = math.floor((vp.X - bannerW) * 0.5)
+
+        BossHUD.bg.Position = Vector2.new(bannerX, hudY)
+        BossHUD.bg.Size = Vector2.new(bannerW, bannerH)
+        BossHUD.bg.Visible = true
+
+        BossHUD.border.Position = Vector2.new(bannerX, hudY)
+        BossHUD.border.Size = Vector2.new(bannerW, bannerH)
+        BossHUD.border.Color = alert.col
+        BossHUD.border.Visible = true
+
+        local centerX = math.floor(vp.X * 0.5)
+        BossHUD.title.Position = Vector2.new(centerX, hudY + 5)
+        BossHUD.title.Text = "[!] BOSS MOVE: " .. alert.name .. "  [" .. alert.type .. "]"
+        BossHUD.title.Color = alert.col
+        BossHUD.title.Visible = true
+
+        BossHUD.choice.Position = Vector2.new(centerX, hudY + 23)
+        BossHUD.choice.Text = alert.choice
+        BossHUD.choice.Visible = true
+
+        local remaining = math.max(0, alert.expire - rNow)
+        BossHUD.timer.Position = Vector2.new(centerX, hudY + 41)
+        BossHUD.timer.Text = string.format("Warning Active: %.1fs", remaining)
+        BossHUD.timer.Visible = true
+    else
+        if BossHUD.bg.Visible then BossHUD.bg.Visible = false end
+        if BossHUD.border.Visible then BossHUD.border.Visible = false end
+        if BossHUD.title.Visible then BossHUD.title.Visible = false end
+        if BossHUD.choice.Visible then BossHUD.choice.Visible = false end
+        if BossHUD.timer.Visible then BossHUD.timer.Visible = false end
+    end
+
+    -- 2. Render 3D World Tag Above Boss
+    if S.bl_gaara_world and alert.root and alert.root.Parent then
+        local okP, rPos = pcall(getPosOf, alert.root)
+        if okP and isValidVec3(rPos) then
+            local topPos = rPos + Vector3.new(0, 5.0, 0)
+            local sp, onScreen = cam:WorldToViewportPoint(topPos)
+            if onScreen and sp.Z > 1 then
+                local sx, sy = math.floor(sp.X), math.floor(sp.Y)
+                local txt = "[BOSS MOVE: " .. alert.name .. "]\n" .. alert.choice
+                BossHUD.tag.Position = Vector2.new(sx, sy)
+                BossHUD.tag.Text = txt
+                BossHUD.tag.Color = alert.col
+                BossHUD.tag.Visible = true
+
+                local tw = math.min(320, #alert.choice * 6)
+                BossHUD.tagBox.Position = Vector2.new(sx - math.floor(tw * 0.5), sy - 2)
+                BossHUD.tagBox.Size = Vector2.new(tw, 32)
+                BossHUD.tagBox.Visible = true
+            else
+                if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
+                if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
+            end
+        else
+            if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
+            if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
+        end
+    else
+        if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
+        if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
+    end
+end
+
 
 -- ============================================================
 --  PLAYER INSPECTOR SYSTEM
@@ -5670,7 +6576,7 @@ function BX.handleLeftClick(mx, my)
     end
 
     -- If JDUI menu is open, let user interact with JDUI without triggering inspector
-    if ui and ui.IsOpen and ui:IsOpen() then return false end
+    if ui and (ui.IsOpen == true or (type(ui.IsOpen) == "function" and ui:IsOpen())) then return false end
 
     local nowClick = os.clock()
     if (nowClick - BX.lastClickAt) < 0.2 then return false end
@@ -5800,6 +6706,7 @@ function BX.hideAllDrawings()
     for i = 1, MOB_POOL_SIZE do local s = mobPool[i]; s.isShown = true; hideMobSlot(s) end
     for i = 1, CORRUPT_POOL_SIZE do local s = corruptPool[i]; s.isShown = true; hideCorruptSlot(s) end
     for i = 1, RIFT_POOL_SIZE do local s = riftPool[i]; s.isShown = true; hideRiftSlot(s) end
+    for i = 1, TRAP_POOL_SIZE do local s = trapPool[i]; s.isShown = true; hideTrapSlot(s) end
     for i = 1, NPC_POOL_SIZE do local s = npcPool[i]; s.isShown = true; hideNPCSlot(s) end
     for i = 1, ITEM_POOL_SIZE do local s = itemPool[i]; s.isShown = true; hideItemSlot(s) end
     setHud(csHudTitle, false)
@@ -5811,6 +6718,7 @@ function BX.hideAllDrawings()
     BX.hideModeTags(1)
     BX.hideStunTags(1)
     BX.hideProfileCard()
+    if BX.hideBossPredictor then pcall(BX.hideBossPredictor) end
 end
 
 function BX.renderFrame()
@@ -5856,7 +6764,7 @@ function BX.renderFrame()
         BX.lastTeleportFlush = rNow
         scanEpoch = scanEpoch + 1
         pcall(BX.hideAllDrawings)
-        trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems = {}, {}, {}, {}, {}
+        trackedMobs, trackedCorrupt, trackedRifts, trackedNPCs, trackedItems, trackedTraps = {}, {}, {}, {}, {}, {}
         mobCands = {}
         drawMobs = {}
         drawItems = {}
@@ -5891,6 +6799,7 @@ function BX.renderFrame()
     pcall(BX.renderMobs)
     pcall(BX.renderCorrupt)
     pcall(BX.renderRifts)
+    pcall(BX.renderTraps)
     pcall(BX.renderNPCs)
     pcall(BX.renderItems)
     pcall(BX.renderChakraHud)
@@ -5902,6 +6811,7 @@ function BX.renderFrame()
     pcall(BX.renderModeTags)
     pcall(BX.renderStunTags)
     pcall(BX.renderStaminaTags)
+    if BX.renderGaaraBossPredictor then pcall(BX.renderGaaraBossPredictor) end
 end
 
 BX.onRender = function(now)
