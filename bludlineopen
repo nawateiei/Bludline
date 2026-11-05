@@ -160,9 +160,10 @@ local BX = {
     backoff = 0, beatDet = os.clock(), beatCol = os.clock(), beatRender = os.clock(),
     beatDeb = os.clock(), beatCs = os.clock(),
     reads = 0, dbgAt = 0, pruneAt = 0, jobBadSince = nil, lastClickAt = 0,
-    debrisAt = -100, debrisRifts = {},
+    debrisAt = -100, debrisRifts = {}, sandWarnings = {},
     vals = {}, posCache = {}, colors = {}, jutsuMemo = {},
 }
+_G.Bloodline_BX = BX
 function BX.RGB(r, g, b)
     local k = r * 65536 + g * 256 + b
     local c = BX.colors[k]
@@ -527,13 +528,18 @@ local S = {
     bl_stamina_self = false,
 
     -- Leaderboard Inspector
-    -- Boss Predictor (Gaara & World Bosses)
-    bl_gaara_pred = true,
-    bl_gaara_hud = true,
-    bl_gaara_world = true,
-    bl_gaara_notify = true,
-    bl_gaara_hud_y = 140,
+
     bl_inspect_en = true,
+    bl_autodef_sand = true,
+    bl_autodef_delay = 0.80,
+    bl_autodef_hold = 0.20,
+    bl_autodef_notify = true,
+    bl_autodef_test_key = 0x56,
+    bl_autodef_ping_comp = true,
+    bl_autodef_ping_mult = 1.0,
+    bl_autodef_rep_overhead = 35,
+    bl_autodef_ping_manual = false,
+    bl_autodef_manual_ping = 65,
 }
 
 local settingsVersion = 0
@@ -595,7 +601,7 @@ if ok_jdui and res_jdui then
     pcall(function()
         ui:SetOverflow("Scroll")
         ui:SetLayout("Compact")
-        ui.CaptureInput = false -- CRITICAL: Never let JDUI call setrobloxinput(false)! Completely eliminates game input lag / "ping" feel
+        ui.CaptureInput = true -- Block Roblox clicks while cursor is over the UI
         if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
         if ui.SetOpen then pcall(ui.SetOpen, ui, false) else ui.Visible = false end
     end)
@@ -860,32 +866,154 @@ if ok_jdui and res_jdui then
         end
     })
 
-    local islBoss = tabCombat:AddIsland({ Title = "Gaara Boss Move Predictor" })
-    islBoss:AddToggle({ Title = "Boss Predictor Enabled", Flag = "bl_gaara_pred", Default = true, Callback = function(v) S.bl_gaara_pred = v; settingsVersion = settingsVersion + 1 end })
-    islBoss:AddToggle({ Title = "Screen Warning Banner", Flag = "bl_gaara_hud", Default = true, Callback = function(v) S.bl_gaara_hud = v; settingsVersion = settingsVersion + 1 end })
-    islBoss:AddToggle({ Title = "Overhead Move Tag on Boss", Flag = "bl_gaara_world", Default = true, Callback = function(v) S.bl_gaara_world = v; settingsVersion = settingsVersion + 1 end })
-    islBoss:AddToggle({ Title = "Notification Toast Alert", Flag = "bl_gaara_notify", Default = true, Callback = function(v) S.bl_gaara_notify = v; settingsVersion = settingsVersion + 1 end })
-    islBoss:AddSlider({
-        Title = "Banner Y Position",
-        Flag = "bl_gaara_hud_y",
-        Min = 60, Max = 400, Step = 10,
-        Default = 140,
-        Suffix = " px",
+
+
+    local islAutoDef = tabCombat:AddIsland({ Title = "Move Auto-Defense" })
+    islAutoDef:AddToggle({ Title = "Auto Block Sand Suspension", Flag = "bl_autodef_sand", Default = true, Callback = function(v) S.bl_autodef_sand = v; settingsVersion = settingsVersion + 1 end })
+    local ctrlDelaySlider, ctrlDelayBox
+    ctrlDelaySlider = islAutoDef:AddSlider({
+        Title = "Delay Before Press (Timing)",
+        Description = "Adjust in 0.01s (10ms) increments, or type below",
+        Flag = "bl_autodef_delay",
+        Min = 0.0, Max = 2.0, Step = 0.01,
+        Default = 0.80,
+        Suffix = " s",
         Callback = function(v)
-            S.bl_gaara_hud_y = math.floor(tonumber(v) or 140)
+            local val = math.floor((tonumber(v) or 0.80) * 100 + 0.5) / 100
+            S.bl_autodef_delay = val
+            settingsVersion = settingsVersion + 1
+            if ctrlDelayBox and tostring(ctrlDelayBox.Value) ~= string.format("%.2f", val) then
+                pcall(function() ctrlDelayBox:SetValue(string.format("%.2f", val), true) end)
+            end
+        end
+    })
+    ctrlDelayBox = islAutoDef:AddTextbox({
+        Title = "Exact Delay (Type seconds)",
+        Placeholder = "e.g. 0.80",
+        Default = string.format("%.2f", S.bl_autodef_delay or 0.80),
+        Callback = function(t)
+            local num = tonumber(t)
+            if num and num >= 0 and num <= 3.0 then
+                num = math.floor(num * 100 + 0.5) / 100
+                S.bl_autodef_delay = num
+                settingsVersion = settingsVersion + 1
+                if ctrlDelaySlider then
+                    pcall(function() ctrlDelaySlider:SetValue(num, true) end)
+                end
+            end
+        end
+    })
+    local ctrlHoldSlider, ctrlHoldBox
+    ctrlHoldSlider = islAutoDef:AddSlider({
+        Title = "Block Hold Duration",
+        Description = "Adjust in 0.01s (10ms) increments, or type below",
+        Flag = "bl_autodef_hold",
+        Min = 0.05, Max = 1.0, Step = 0.01,
+        Default = 0.20,
+        Suffix = " s",
+        Callback = function(v)
+            local val = math.floor((tonumber(v) or 0.20) * 100 + 0.5) / 100
+            S.bl_autodef_hold = val
+            settingsVersion = settingsVersion + 1
+            if ctrlHoldBox and tostring(ctrlHoldBox.Value) ~= string.format("%.2f", val) then
+                pcall(function() ctrlHoldBox:SetValue(string.format("%.2f", val), true) end)
+            end
+        end
+    })
+    ctrlHoldBox = islAutoDef:AddTextbox({
+        Title = "Exact Hold (Type seconds)",
+        Placeholder = "e.g. 0.35",
+        Default = string.format("%.2f", S.bl_autodef_hold or 0.20),
+        Callback = function(t)
+            local num = tonumber(t)
+            if num and num >= 0.05 and num <= 2.0 then
+                num = math.floor(num * 100 + 0.5) / 100
+                S.bl_autodef_hold = num
+                settingsVersion = settingsVersion + 1
+                if ctrlHoldSlider then
+                    pcall(function() ctrlHoldSlider:SetValue(num, true) end)
+                end
+            end
+        end
+    })
+    islAutoDef:AddButton({
+        Title = "Set Standard Sand Delay (0.80s / 0.35s hold)",
+        Callback = function()
+            S.bl_autodef_delay = 0.80
+            S.bl_autodef_hold = 0.35
+            settingsVersion = settingsVersion + 1
+            if ctrlDelaySlider then pcall(function() ctrlDelaySlider:SetValue(0.80) end) end
+            if ctrlDelayBox then pcall(function() ctrlDelayBox:SetValue("0.80") end) end
+            if ctrlHoldSlider then pcall(function() ctrlHoldSlider:SetValue(0.35) end) end
+            if ctrlHoldBox then pcall(function() ctrlHoldBox:SetValue("0.35") end) end
+            if notify then notify("TIMING PRESET", "Parry Delay set to 0.80s (Hold: 0.35s)", 3) end
+        end
+    })
+    islAutoDef:AddToggle({ Title = "Show Defense Notification", Flag = "bl_autodef_notify", Default = true, Callback = function(v) S.bl_autodef_notify = v; settingsVersion = settingsVersion + 1 end })
+    islAutoDef:AddKeybind({
+        Title = "Test Parry Hotkey",
+        Description = "Press this key in-game to test block without opening UI",
+        Flag = "bl_autodef_test_key",
+        Default = 0x56,
+        Callback = function(k)
+            S.bl_autodef_test_key = tonumber(k) or 0x56
             settingsVersion = settingsVersion + 1
         end
     })
-    islBoss:AddButton({
-        Title = "Test Move: Sand Coffin (Grab)",
-        Callback = function()
-            if BX.triggerBossAlert then pcall(BX.triggerBossAlert, "Sand Coffin") end
+    islAutoDef:AddToggle({
+        Title = "Ping Compensation",
+        Description = "Auto-adjust parry timing based on live network latency",
+        Flag = "bl_autodef_ping_comp",
+        Default = true,
+        Callback = function(v)
+            S.bl_autodef_ping_comp = v
+            settingsVersion = settingsVersion + 1
         end
     })
-    islBoss:AddButton({
-        Title = "Test Move: Sand Tsunami (AOE)",
-        Callback = function()
-            if BX.triggerBossAlert then pcall(BX.triggerBossAlert, "Sand Tsunami") end
+    islAutoDef:AddSlider({
+        Title = "Ping Comp Multiplier",
+        Description = "1.0 = Full RTT (Recommended), 0.5 = One-Way",
+        Flag = "bl_autodef_ping_mult",
+        Min = 0.1, Max = 1.5, Step = 0.1,
+        Default = 1.0,
+        Suffix = "x",
+        Callback = function(v)
+            S.bl_autodef_ping_mult = tonumber(v) or 1.0
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islAutoDef:AddSlider({
+        Title = "Replication Delay Buffer",
+        Description = "Adds to raw socket ping to match Shift+F3 Data Ping",
+        Flag = "bl_autodef_rep_overhead",
+        Min = 0, Max = 100, Step = 5,
+        Default = 35,
+        Suffix = " ms",
+        Callback = function(v)
+            S.bl_autodef_rep_overhead = tonumber(v) or 35
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islAutoDef:AddToggle({
+        Title = "Manual Ping Override",
+        Description = "Lock ping to a fixed value instead of detecting",
+        Flag = "bl_autodef_ping_manual",
+        Default = false,
+        Callback = function(v)
+            S.bl_autodef_ping_manual = v
+            settingsVersion = settingsVersion + 1
+        end
+    })
+    islAutoDef:AddSlider({
+        Title = "Manual Ping Value",
+        Description = "Used when Manual Ping Override is enabled",
+        Flag = "bl_autodef_manual_ping",
+        Min = 20, Max = 300, Step = 5,
+        Default = 65,
+        Suffix = " ms",
+        Callback = function(v)
+            S.bl_autodef_manual_ping = tonumber(v) or 65
+            settingsVersion = settingsVersion + 1
         end
     })
 
@@ -904,7 +1032,9 @@ if ok_jdui and res_jdui then
         end
     })
 
-    pcall(function() ui:SetConfig("bloodline_esp") end)
+    pcall(function()
+        ui:SetConfig("bloodline_esp")
+    end)
 end
 
 -- ============================================================
@@ -1045,183 +1175,6 @@ csHudContent.Outline = true
 csHudContent.Visible = false
 csHudContent.Position = Vector2.new(16, 238)
 
--- ============================================================
---  GAARA BOSS MOVE PREDICTOR & COUNTER SYSTEM
--- ============================================================
-local GAARA_MOVE_DB = {
-    ["sand coffin"] = {
-        name = "SAND COFFIN",
-        choice = ">> SUB / DODGE NOW! DO NOT BLOCK! <<",
-        type = "GRAB / GUARDBREAK",
-        col = Color3.fromRGB(255, 45, 45),
-        ttl = 3.5,
-    },
-    ["grand sand masoleum"] = {
-        name = "GRAND SAND MAUSOLEUM",
-        choice = ">> SUB IMMEDIATELY! SPRINT OUT OF RING! <<",
-        type = "LETHAL BURIAL AOE",
-        col = Color3.fromRGB(255, 15, 15),
-        ttl = 4.2,
-    },
-    ["sand masoleum"] = {
-        name = "SAND MAUSOLEUM",
-        choice = ">> SUB IMMEDIATELY! SPRINT OUT OF RING! <<",
-        type = "BURIAL AOE",
-        col = Color3.fromRGB(255, 30, 30),
-        ttl = 3.8,
-    },
-    ["sand tsunami"] = {
-        name = "SAND TSUNAMI",
-        choice = ">> DOUBLE JUMP / AERIAL HIGH GROUND! <<",
-        type = "GROUND WAVE AOE",
-        col = Color3.fromRGB(255, 140, 20),
-        ttl = 3.8,
-    },
-    ["quicksand"] = {
-        name = "QUICKSAND",
-        choice = ">> JUMP OUT / SPRINT AWAY FROM AREA! <<",
-        type = "SLOWING GROUND TRAP",
-        col = Color3.fromRGB(235, 180, 25),
-        ttl = 3.5,
-    },
-    ["sand suspension"] = {
-        name = "SAND SUSPENSION",
-        choice = ">> HOLD BLOCK / AIR DODGE EXPLOSION! <<",
-        type = "AERIAL BLAST",
-        col = Color3.fromRGB(0, 225, 255),
-        ttl = 3.0,
-    },
-    ["sand shield"] = {
-        name = "SAND SHIELD",
-        choice = ">> CEASE ATTACKING! DO NOT HIT SPIKES! <<",
-        type = "REFLECT COUNTER",
-        col = Color3.fromRGB(255, 215, 0),
-        ttl = 4.0,
-    },
-    ["sand barrage"] = {
-        name = "SAND BARRAGE",
-        choice = ">> HOLD BLOCK / PARRY CONTINUOUSLY! <<",
-        type = "RAPID PROJECTILES",
-        col = Color3.fromRGB(255, 190, 40),
-        ttl = 3.2,
-    },
-    ["iron sand boulder"] = {
-        name = "IRON SAND BOULDER",
-        choice = ">> DODGE / ROLL SIDEWAYS OUT OF LINE! <<",
-        type = "HEAVY BOULDER",
-        col = Color3.fromRGB(210, 70, 210),
-        ttl = 3.0,
-    },
-    ["big sand slash"] = {
-        name = "BIG SAND SLASH",
-        choice = ">> PARRY / BLOCK / STEP BACK! <<",
-        type = "HEAVY MELEE COMBO",
-        col = Color3.fromRGB(255, 160, 60),
-        ttl = 2.5,
-    },
-    ["sand slash"] = {
-        name = "SAND SLASH",
-        choice = ">> BLOCK / PARRY MELEE! <<",
-        type = "MELEE ATTACK",
-        col = Color3.fromRGB(255, 175, 75),
-        ttl = 2.2,
-    },
-    ["burrow"] = {
-        name = "BURROW (UNDERGROUND)",
-        choice = ">> SPRINT AWAY / KEEP MOVING! <<",
-        type = "UNTOUCHABLE AMBUSH",
-        col = Color3.fromRGB(210, 190, 130),
-        ttl = 3.5,
-    },
-    ["inground"] = {
-        name = "IN GROUND (UNDERGROUND)",
-        choice = ">> SPRINT AWAY / KEEP MOVING! <<",
-        type = "UNTOUCHABLE AMBUSH",
-        col = Color3.fromRGB(210, 190, 130),
-        ttl = 3.5,
-    },
-    ["sand reflex"] = {
-        name = "SAND REFLEX (DODGE)",
-        choice = ">> DO NOT WHIFF / RESET POSITION! <<",
-        type = "AUTO EVASION",
-        col = Color3.fromRGB(120, 200, 255),
-        ttl = 2.5,
-    },
-}
-
-local BossHUD = {
-    bg = Drawing.new("Square"),
-    border = Drawing.new("Square"),
-    title = Drawing.new("Text"),
-    choice = Drawing.new("Text"),
-    timer = Drawing.new("Text"),
-    tag = Drawing.new("Text"),
-    tagBox = Drawing.new("Square"),
-    activeAlert = nil,
-    lastSkill = "",
-    lastTriggerAt = -100,
-    lastBurrow = false,
-    cachedBoss = nil,
-    cachedSettings = nil,
-    cachedSkillVal = nil,
-    cachedBurrowVal = nil,
-    cachedInGroundVal = nil,
-    cachedRoot = nil,
-    cachedHum = nil,
-    lastBossCheck = -100,
-    seenDebris = {},
-}
-BossHUD.bg.Filled = true
-BossHUD.bg.Color = Color3.fromRGB(10, 10, 15)
-BossHUD.bg.Transparency = 0.25
-BossHUD.bg.ZIndex = 10
-BossHUD.bg.Visible = false
-
-BossHUD.border.Thickness = 2
-BossHUD.border.Filled = false
-BossHUD.border.Color = Color3.fromRGB(255, 50, 50)
-BossHUD.border.ZIndex = 11
-BossHUD.border.Visible = false
-
-BossHUD.title.Size = 16
-BossHUD.title.Font = Drawing.Fonts.SystemBold
-BossHUD.title.Center = true
-BossHUD.title.Outline = true
-BossHUD.title.Color = Color3.fromRGB(255, 60, 60)
-BossHUD.title.ZIndex = 12
-BossHUD.title.Visible = false
-
-BossHUD.choice.Size = 14
-BossHUD.choice.Font = Drawing.Fonts.SystemBold
-BossHUD.choice.Center = true
-BossHUD.choice.Outline = true
-BossHUD.choice.Color = Color3.fromRGB(255, 240, 90)
-BossHUD.choice.ZIndex = 12
-BossHUD.choice.Visible = false
-
-BossHUD.timer.Size = 11
-BossHUD.timer.Font = Drawing.Fonts.System
-BossHUD.timer.Center = true
-BossHUD.timer.Outline = true
-BossHUD.timer.Color = Color3.fromRGB(190, 200, 215)
-BossHUD.timer.ZIndex = 12
-BossHUD.timer.Visible = false
-
-BossHUD.tagBox.Filled = true
-BossHUD.tagBox.Color = Color3.fromRGB(12, 12, 16)
-BossHUD.tagBox.Transparency = 0.65
-BossHUD.tagBox.ZIndex = 2
-BossHUD.tagBox.Visible = false
-
-BossHUD.tag.Size = 14
-BossHUD.tag.Font = Drawing.Fonts.SystemBold
-BossHUD.tag.Center = true
-BossHUD.tag.Outline = true
-BossHUD.tag.Color = Color3.fromRGB(255, 60, 60)
-BossHUD.tag.ZIndex = 3
-BossHUD.tag.Visible = false
-
-_G.Bloodline_BossHUD = BossHUD
 
 -- Jutsu Overhead Tag State
 local JutsuRadar = {
@@ -1559,16 +1512,7 @@ _G.Bloodline_cleanup = function()
         _G.Bloodline_csHudContent = nil
     end
 
-    if _G.Bloodline_BossHUD then
-        safeRemove(_G.Bloodline_BossHUD.bg)
-        safeRemove(_G.Bloodline_BossHUD.border)
-        safeRemove(_G.Bloodline_BossHUD.title)
-        safeRemove(_G.Bloodline_BossHUD.choice)
-        safeRemove(_G.Bloodline_BossHUD.timer)
-        safeRemove(_G.Bloodline_BossHUD.tag)
-        safeRemove(_G.Bloodline_BossHUD.tagBox)
-        _G.Bloodline_BossHUD = nil
-    end
+
 
     if _G.Bloodline_JutsuRadar and _G.Bloodline_JutsuRadar.tags then
         for i = 1, #_G.Bloodline_JutsuRadar.tags do
@@ -2390,7 +2334,7 @@ end
 
 local tickCount = 0
 local function updateActiveCasts()
-    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en or S.bl_gaara_pred
+    local combatActive = S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en
     if not combatActive then
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
         return
@@ -2417,9 +2361,7 @@ local function updateActiveCasts()
     else
         if next(JutsuRadar.activeCasts) then JutsuRadar.activeCasts = {} end
     end
-    if S.bl_gaara_pred and BX.checkGaaraBoss then
-        pcall(BX.checkGaaraBoss, now)
-    end
+
     sectionPurge(os.clock())
 end
 
@@ -2442,7 +2384,7 @@ BX.startDet = function()
             end
 
             local delay = CYCLE_OFF
-            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en or S.bl_gaara_pred then
+            if S.bl_jutsu_tag or S.bl_sub_en or S.bl_iframe_en or S.bl_mode_en or S.bl_stun_en or S.bl_stamina_en then
                 if (JutsuRadar.order and JutsuRadar.order[1]) or (S.bl_jutsu_mobs and mobCands[1]) then
                     delay = CYCLE_ACTIVE
                 else
@@ -3035,9 +2977,10 @@ local function scanChakra()
             local now = os.clock()
             for i = 1, #cdList do
                 local pFolder = cdList[i]
-                local csVal = pFolder and pFolder:FindFirstChild("Chakra Sense")
+                local csVal = pFolder and (pFolder:FindFirstChild("Chakra Sense") or pFolder:FindFirstChild("ChakraSense"))
                 if csVal then
                     local pName = pFolder.Name
+                    if pName == P_myName then continue end
                     local char = (P_playerChars and P_playerChars[pName])
                     if not char then
                         local pObj = Players:FindFirstChild(pName)
@@ -3077,10 +3020,11 @@ local function scanChakra()
 
                     -- Calculate distance if character root is available in Workspace
                     local distStuds = nil
-                    if P_myPos and root then
-                        local okP, rp = pcall(getPosOf, root)
+                    local myPos = (P_myPos and isValidVec3(P_myPos) and P_myPos.Magnitude > 0 and P_myPos) or lastMyPos or rCamPos
+                    if myPos and root then
+                        local okP, rp = pcall(function() return root.Position end)
                         if okP and isValidVec3(rp) then
-                            distStuds = math.floor((P_myPos - rp).Magnitude)
+                            distStuds = math.floor((myPos - rp).Magnitude)
                         end
                     end
 
@@ -3090,7 +3034,7 @@ local function scanChakra()
                         dist = distStuds,
                     }
 
-                    if not notifiedChakraUsers[pName] then
+                    if pName ~= P_myName and not notifiedChakraUsers[pName] then
                         notifiedChakraUsers[pName] = true
                         if S.bl_cs_notify then
                             notify("Chakra Sense Detected!", string.format("%s has Chakra Sense in loadout!", pName), 7)
@@ -3129,6 +3073,7 @@ local function scanChakra()
         for i = 1, #setList do
             local pFolder = setList[i]
             local pName = pFolder.Name
+            if pName == P_myName then continue end
             local alreadyAdded = false
             for j = 1, #freshChakra do
                 if freshChakra[j].name == pName then alreadyAdded = true; break end
@@ -3332,43 +3277,10 @@ end
 BX.startCol()
 
 local debTok = 0
+local debTok = 0
 BX.startDeb = function()
     debTok = debTok + 1
     local myTok = debTok
-
-    -- Instant 0ms ChildAdded listener for event portals spawning in Debris
-    pcall(function()
-        local deb = Workspace:FindFirstChild("Debris")
-        if deb then
-            if _G.Bloodline_debAddConn then
-                pcall(function() _G.Bloodline_debAddConn:Disconnect() end)
-            end
-            _G.Bloodline_debAddConn = deb.ChildAdded:Connect(function(child)
-                if child and alive() then
-                    local okN, cName = pcall(function() return child.Name end)
-                    if okN and isEventPortal(cName) then
-                        table.insert(BX.debrisRifts, child)
-                        if S.bl_rift_notify then
-                            notify("PORTAL DETECTED!", string.format("%s spawned!", cName), 10)
-                        end
-                    elseif okN and S.bl_gaara_pred and BX.triggerBossAlert then
-                        local l = cName:lower()
-                        if l:find("sand coffin") then
-                            BX.triggerBossAlert("Sand Coffin")
-                        elseif l:find("big sand slash") then
-                            BX.triggerBossAlert("Big Sand Slash")
-                        elseif l:find("sand shield") or l:find("sandshield") then
-                            BX.triggerBossAlert("Sand Shield")
-                        elseif l:find("sand masoleum") or l:find("sandmasoleum") then
-                            BX.triggerBossAlert("Sand Masoleum")
-                        elseif l:find("sand tsunami") or l:find("sandpit") then
-                            BX.triggerBossAlert("Sand Tsunami")
-                        end
-                    end
-                end
-            end)
-        end
-    end)
 
     task.spawn(function()
         while _G.Bloodline_running and _G.Bloodline_gen == MY_GEN and debTok == myTok do
@@ -3378,8 +3290,10 @@ BX.startDeb = function()
                     local deb = Workspace:FindFirstChild("Debris")
                     if deb and alive() then
                         local kids = deb:GetChildren()
+                        local total = #kids
                         local found = {}
-                        for i = 1, #kids do
+                        local startIdx = math.max(1, total - 60)
+                        for i = total, startIdx, -1 do
                             local child = kids[i]
                             if child and alive() then
                                 local okN, cName = pcall(function() return child.Name end)
@@ -4975,223 +4889,6 @@ function BX.renderStaminaTags()
     BX.hideStaminaTags(count + 1)
 end
 -- ============================================================
---  GAARA BOSS MOVE PREDICTOR ENGINE
--- ============================================================
-function BX.triggerBossAlert(rawMoveName, bossRootOverride)
-    if not S.bl_gaara_pred then return end
-    if type(rawMoveName) ~= "string" or #rawMoveName == 0 then return end
-    local lName = rawMoveName:lower()
-    local info = nil
-    for k, v in pairs(GAARA_MOVE_DB) do
-        if lName == k or lName:find(k, 1, true) then
-            info = v
-            break
-        end
-    end
-    if not info then
-        info = {
-            name = rawMoveName:upper(),
-            choice = ">> PREPARE REACTION: BLOCK OR SUB / DODGE! <<",
-            type = "BOSS JUTSU",
-            col = Color3.fromRGB(255, 220, 80),
-            ttl = 3.2,
-        }
-    end
-
-    local now = os.clock()
-    BossHUD.activeAlert = {
-        name = info.name,
-        choice = info.choice,
-        type = info.type,
-        col = info.col,
-        expire = now + (info.ttl or 3.5),
-        startAt = now,
-        root = bossRootOverride or BossHUD.cachedRoot,
-    }
-
-    if S.bl_gaara_notify and notify then
-        notify("GAARA BOSS MOVE!", string.format("%s [%s]\n%s", info.name, info.type, info.choice), 4)
-    end
-end
-
-function BX.checkGaaraBoss(now)
-    if not S.bl_gaara_pred then return end
-
-    -- Re-resolve boss if cached reference is stale
-    local b = BossHUD.cachedBoss
-    local hum = BossHUD.cachedHum
-    if not (b and b.Parent == Workspace and hum and isAliveHum(hum)) then
-        BossHUD.cachedBoss = nil
-        BossHUD.cachedSettings = nil
-        BossHUD.cachedSkillVal = nil
-        BossHUD.cachedBurrowVal = nil
-        BossHUD.cachedInGroundVal = nil
-        BossHUD.cachedRoot = nil
-        BossHUD.cachedHum = nil
-
-        if (now - BossHUD.lastBossCheck) > 2.0 then
-            BossHUD.lastBossCheck = now
-            local g = Workspace:FindFirstChild("Hallowed Gaara")
-            if g then
-                BossHUD.cachedBoss = g
-                local s = g:FindFirstChild("Settings")
-                BossHUD.cachedSettings = s
-                BossHUD.cachedSkillVal = s and s:FindFirstChild("CurrentSkill")
-                BossHUD.cachedBurrowVal = s and s:FindFirstChild("Burrowing")
-                BossHUD.cachedInGroundVal = s and s:FindFirstChild("InGround")
-                BossHUD.cachedRoot = g:FindFirstChild("HumanoidRootPart") or g:FindFirstChild("Torso") or g:FindFirstChildOfClass("BasePart")
-                BossHUD.cachedHum = g:FindFirstChildOfClass("Humanoid")
-            end
-        end
-    end
-
-    -- If boss is active, check skills and state
-    if BossHUD.cachedBoss then
-        local root = BossHUD.cachedRoot
-        if not root or not root.Parent then
-            BossHUD.cachedRoot = BossHUD.cachedBoss:FindFirstChild("HumanoidRootPart") or BossHUD.cachedBoss:FindFirstChild("Torso")
-        end
-
-        -- 1. Check CurrentSkill Value
-        if BossHUD.cachedSkillVal then
-            local ok, rawSkill = pcall(getValue, BossHUD.cachedSkillVal)
-            if ok and type(rawSkill) == "string" and rawSkill ~= "" and rawSkill ~= "None" then
-                if rawSkill ~= BossHUD.lastSkill or (now - BossHUD.lastTriggerAt) > 3.0 then
-                    BossHUD.lastSkill = rawSkill
-                    BossHUD.lastTriggerAt = now
-                    BX.triggerBossAlert(rawSkill, BossHUD.cachedRoot)
-                end
-            else
-                BossHUD.lastSkill = ""
-            end
-        end
-
-        -- 2. Check Burrowing / InGround state
-        local isBurrow = false
-        if BossHUD.cachedBurrowVal then
-            local ok, bv = pcall(getValue, BossHUD.cachedBurrowVal)
-            if ok and bv == true then isBurrow = true end
-        end
-        if not isBurrow and BossHUD.cachedInGroundVal then
-            local ok, gv = pcall(getValue, BossHUD.cachedInGroundVal)
-            if ok and gv == true then isBurrow = true end
-        end
-        if isBurrow then
-            if not BossHUD.lastBurrow then
-                BossHUD.lastBurrow = true
-                BX.triggerBossAlert("Burrow", BossHUD.cachedRoot)
-            end
-        else
-            BossHUD.lastBurrow = false
-        end
-    end
-
-    -- (Debris move spawns handled via 0ms ChildAdded event in BX.startDeb with zero polling overhead)
-end
-
-function BX.hideBossPredictor()
-    if BossHUD.bg.Visible then BossHUD.bg.Visible = false end
-    if BossHUD.border.Visible then BossHUD.border.Visible = false end
-    if BossHUD.title.Visible then BossHUD.title.Visible = false end
-    if BossHUD.choice.Visible then BossHUD.choice.Visible = false end
-    if BossHUD.timer.Visible then BossHUD.timer.Visible = false end
-    if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
-    if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
-end
-
-function BX.renderGaaraBossPredictor()
-    if not S.bl_gaara_pred then
-        BX.hideBossPredictor()
-        return
-    end
-
-
-    local alert = BossHUD.activeAlert
-    if not alert or rNow >= alert.expire then
-        BossHUD.activeAlert = nil
-        BX.hideBossPredictor()
-        return
-    end
-
-    local cam = Workspace.CurrentCamera
-    local vp = cam and cam.ViewportSize
-    if not vp or vp.X < 50 or vp.Y < 50 then
-        BX.hideBossPredictor()
-        return
-    end
-
-    -- 1. Render Screen Warning Banner HUD
-    if S.bl_gaara_hud then
-        local hudY = S.bl_gaara_hud_y or 140
-        local bannerW = 460
-        local bannerH = 56
-        local bannerX = math.floor((vp.X - bannerW) * 0.5)
-
-        BossHUD.bg.Position = Vector2.new(bannerX, hudY)
-        BossHUD.bg.Size = Vector2.new(bannerW, bannerH)
-        BossHUD.bg.Visible = true
-
-        BossHUD.border.Position = Vector2.new(bannerX, hudY)
-        BossHUD.border.Size = Vector2.new(bannerW, bannerH)
-        BossHUD.border.Color = alert.col
-        BossHUD.border.Visible = true
-
-        local centerX = math.floor(vp.X * 0.5)
-        BossHUD.title.Position = Vector2.new(centerX, hudY + 5)
-        BossHUD.title.Text = "[!] BOSS MOVE: " .. alert.name .. "  [" .. alert.type .. "]"
-        BossHUD.title.Color = alert.col
-        BossHUD.title.Visible = true
-
-        BossHUD.choice.Position = Vector2.new(centerX, hudY + 23)
-        BossHUD.choice.Text = alert.choice
-        BossHUD.choice.Visible = true
-
-        local remaining = math.max(0, alert.expire - rNow)
-        BossHUD.timer.Position = Vector2.new(centerX, hudY + 41)
-        BossHUD.timer.Text = string.format("Warning Active: %.1fs", remaining)
-        BossHUD.timer.Visible = true
-    else
-        if BossHUD.bg.Visible then BossHUD.bg.Visible = false end
-        if BossHUD.border.Visible then BossHUD.border.Visible = false end
-        if BossHUD.title.Visible then BossHUD.title.Visible = false end
-        if BossHUD.choice.Visible then BossHUD.choice.Visible = false end
-        if BossHUD.timer.Visible then BossHUD.timer.Visible = false end
-    end
-
-    -- 2. Render 3D World Tag Above Boss
-    if S.bl_gaara_world and alert.root and alert.root.Parent then
-        local okP, rPos = pcall(getPosOf, alert.root)
-        if okP and isValidVec3(rPos) then
-            local topPos = rPos + Vector3.new(0, 5.0, 0)
-            local sp, onScreen = cam:WorldToViewportPoint(topPos)
-            if onScreen and sp.Z > 1 then
-                local sx, sy = math.floor(sp.X), math.floor(sp.Y)
-                local txt = "[BOSS MOVE: " .. alert.name .. "]\n" .. alert.choice
-                BossHUD.tag.Position = Vector2.new(sx, sy)
-                BossHUD.tag.Text = txt
-                BossHUD.tag.Color = alert.col
-                BossHUD.tag.Visible = true
-
-                local tw = math.min(320, #alert.choice * 6)
-                BossHUD.tagBox.Position = Vector2.new(sx - math.floor(tw * 0.5), sy - 2)
-                BossHUD.tagBox.Size = Vector2.new(tw, 32)
-                BossHUD.tagBox.Visible = true
-            else
-                if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
-                if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
-            end
-        else
-            if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
-            if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
-        end
-    else
-        if BossHUD.tag.Visible then BossHUD.tag.Visible = false end
-        if BossHUD.tagBox.Visible then BossHUD.tagBox.Visible = false end
-    end
-end
-
-
--- ============================================================
 --  PLAYER INSPECTOR SYSTEM
 -- ============================================================
 -- ============================================================
@@ -6576,7 +6273,7 @@ function BX.handleLeftClick(mx, my)
     end
 
     -- If JDUI menu is open, let user interact with JDUI without triggering inspector
-    if ui and (ui.IsOpen == true or (type(ui.IsOpen) == "function" and ui:IsOpen())) then return false end
+    if ui and ui.Alive and (ui.IsOpen == true or (type(ui.IsOpen) == "function" and ui:IsOpen())) then return false end
 
     local nowClick = os.clock()
     if (nowClick - BX.lastClickAt) < 0.2 then return false end
@@ -6811,9 +6508,104 @@ function BX.renderFrame()
     pcall(BX.renderModeTags)
     pcall(BX.renderStunTags)
     pcall(BX.renderStaminaTags)
-    if BX.renderGaaraBossPredictor then pcall(BX.renderGaaraBossPredictor) end
 end
 
+-- ============================================================
+--  SAND SUSPENSION AUTO-DEFENSE (High-Speed Tail Scanner)
+-- ============================================================
+local lastAutoDefAt = 0
+local lastDebrisScan = 0
+local debCache = nil
+local activeSeenWarnings = {}
+
+function BX.checkSandAutoDefense(now)
+    if not S.bl_autodef_sand then return end
+
+    -- Scan Debris tail every 0.035s (~28 checks/sec = ~35ms max latency, zero lag)
+    if (now - lastDebrisScan) < 0.035 then return end
+    lastDebrisScan = now
+
+    if not debCache or not debCache.Parent then
+        debCache = Workspace:FindFirstChild("Debris")
+    end
+    local deb = debCache
+    if not deb then return end
+
+    local lp = Players.LocalPlayer
+    local myChar = lp and lp.Character
+    local myRoot = myChar and (myChar:FindFirstChild("HumanoidRootPart") or myChar:FindFirstChild("Torso"))
+    local myPos = (myRoot and myRoot.Position) or (P_myPos and isValidVec3(P_myPos) and P_myPos) or lastMyPos
+    if not myPos then return end
+
+    -- Prune expired warning trackers
+    for inst, t in pairs(activeSeenWarnings) do
+        local ok, p = pcall(function() return inst.Parent end)
+        if not ok or p ~= deb or (now - t) > 2.5 then
+            activeSeenWarnings[inst] = nil
+        end
+    end
+
+    local kids = deb:GetChildren()
+    local total = #kids
+    local startIdx = math.max(1, total - 45)
+    for i = total, startIdx, -1 do
+        local c = kids[i]
+        local okN, name = pcall(function() return c.Name end)
+        if okN and (name == "LightningWarning" or name == "CircleWarning") then
+            if not activeSeenWarnings[c] then
+                activeSeenWarnings[c] = now
+
+                local pPos = Vector3.new(0, 0, 0)
+                local s = Vector3.new(0, 0, 0)
+                pcall(function() pPos = c.Position end)
+                pcall(function() s = c.Size end)
+
+                local dX = myPos.X - pPos.X
+                local dZ = myPos.Z - pPos.Z
+                local horizDist = math.sqrt(dX * dX + dZ * dZ)
+                local deltaY = myPos.Y - pPos.Y
+                local maxRadius = math.max(13.0, (s.X * 0.48))
+
+                -- Aerial / Jump support: detects circle locked directly beneath player (even when jumping 10-100 studs high)
+                local isAtMyFeet = (horizDist <= maxRadius and deltaY >= -8.0 and deltaY <= 100.0)
+                local isSandSize = (s.X >= 8 and s.X <= 38)
+
+                if isAtMyFeet and isSandSize then
+                    if (now - lastAutoDefAt) > 1.2 then
+                        lastAutoDefAt = now
+                        local rawDelay = S.bl_autodef_delay or 0.80
+                        local rawHold = S.bl_autodef_hold or 0.20
+                        local delayTime, holdTime, dataPingMs, compOffset, rawNet, repOvh = BX.calculateCompensatedTiming(rawDelay, rawHold)
+                        local isAirborne = (deltaY > 7.0)
+
+                        task.spawn(function()
+                            if delayTime > 0 then
+                                task.wait(delayTime)
+                            end
+                            if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
+                            if keypress then pcall(keypress, 0x46) end
+                            task.wait(0.08)
+                            local rs = game:GetService("ReplicatedStorage")
+                            local bVal = lp and rs:FindFirstChild("Settings") and rs.Settings:FindFirstChild(lp.Name) and rs.Settings[lp.Name]:FindFirstChild("Blocking")
+                            local isBlocking = bVal and bVal.Value or false
+                            print(string.format("[AUTO-DEFENSE] F Pressed%s! Blocking active: %s", isAirborne and " (Airborne)" or "", tostring(isBlocking)))
+                            task.wait(math.max(0.05, holdTime - 0.08))
+                            if keyrelease then pcall(keyrelease, 0x46) end
+                            print(string.format("[AUTO-DEFENSE] F released%s!", isAirborne and " (Airborne)" or ""))
+                        end)
+
+                        if S.bl_autodef_notify and notify then
+                            local stateTitle = isAirborne and "AERIAL PARRY TRIGGERED" or "PARRY TRIGGERED"
+                            local stateDesc = isAirborne and string.format("Airborne (%.0f studs above ground) | Parrying in %.2fs (hold %.2fs)", deltaY, delayTime, holdTime) or string.format("Data Ping %dms (-%.0fms) | Parrying in %.2fs (hold %.2fs)", math.floor(dataPingMs), compOffset * 1000, delayTime, holdTime)
+                            notify(stateTitle, stateDesc, 3)
+                        end
+                        print(string.format("[AUTO-DEFENSE] Red circle %s! Height diff: %.1f studs | Data Ping: %dms (Net: %dms + %dms rep, Comp: -%.3fs) | Delay: %.2fs -> %.2fs | Hold: %.2fs", isAirborne and "beneath you in air" or "on feet", deltaY, math.floor(dataPingMs), math.floor(rawNet), math.floor(repOvh), compOffset, rawDelay, delayTime, holdTime))
+                    end
+                end
+            end
+        end
+    end
+end
 BX.onRender = function(now)
     now = now or os.clock()
     BX.beatRender = now
@@ -6838,13 +6630,24 @@ BX.onRender = function(now)
             if Card.visible then pcall(BX.hideProfileCard) end
         end
         Card.lastXState = isX
+
+        local testKey = tonumber(S.bl_autodef_test_key) or 0x56
+        if testKey and testKey > 0 then
+            local isTestDown = iskeypressed(testKey)
+            if isTestDown and not Card.lastTestKeyState then
+                if not (ui and ui.Alive and (ui.IsOpen == true or (type(ui.IsOpen) == "function" and ui:IsOpen()))) then
+                    pcall(BX.triggerTestParry)
+                end
+            end
+            Card.lastTestKeyState = isTestDown
+        end
     end
 
     _G.Bloodline_renderFrameCount = _G.Bloodline_renderFrameCount + 1
 
     if now - lastSettingsPoll >= SETTINGS_POLL then
         lastSettingsPoll = now
-        if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
+        -- Input managed dynamically by JDUI overMenu / takeInput
         pcall(refreshSettings)
     end
 
@@ -6854,11 +6657,12 @@ BX.onRender = function(now)
     if not ok then
         logCrash("RenderFrame", err, false)
     end
+    pcall(BX.checkSandAutoDefense, now)
 
     -- load shedding: adaptive backoff that protects slow PCs from graphics crashes while keeping fast PCs at 90 FPS
     local cost = os.clock() - now
-    if cost > 0.008 then
-        local b = (cost - 0.008) * 1.5
+    if cost > 0.016 then
+        local b = (cost - 0.016) * 1.5
         if b > 0.025 then b = 0.025 end
         if b > BX.backoff then BX.backoff = b end
     else
@@ -6936,3 +6740,87 @@ end
 notify("Bloodline ESP", "Watchdog active! Crash tracker ready.", 4)
 logDebug("Bloodline ESP time-sliced engine running.", true)
 print("[Bloodline] Watchdog active! Crash tracker ready.")
+
+local smoothDataPingMs = 65
+
+function BX.getPingMs()
+    if S.bl_autodef_ping_manual and S.bl_autodef_manual_ping then
+        local manual = tonumber(S.bl_autodef_manual_ping) or 65
+        return manual, manual, 0
+    end
+
+    local rawNetPing = 30
+    if type(GetPingValue) == "function" then
+        local p = GetPingValue()
+        if type(p) == "number" and p > 0 and p < 2000 then rawNetPing = p end
+    end
+
+    local repOverhead = tonumber(S.bl_autodef_rep_overhead) or 35
+    local dataPing = rawNetPing + repOverhead
+
+    smoothDataPingMs = (smoothDataPingMs * 0.70) + (dataPing * 0.30)
+    return smoothDataPingMs, rawNetPing, repOverhead
+end
+
+function BX.calculateCompensatedTiming(baseDelay, baseHold)
+    baseDelay = tonumber(baseDelay) or 0.80
+    baseHold = tonumber(baseHold) or 0.20
+
+    if not S.bl_autodef_ping_comp then
+        return baseDelay, baseHold, 0, 0, 0, 0
+    end
+
+    local dataPingMs, rawNetPing, repOverhead = BX.getPingMs()
+    local pingSec = dataPingMs / 1000.0
+
+    local mult = tonumber(S.bl_autodef_ping_mult) or 1.0
+    local compOffset = pingSec * mult
+
+    local compDelay = math.max(0.02, baseDelay - compOffset)
+    local holdExtension = math.clamp(pingSec * 0.40, 0, 0.15)
+    local compHold = baseHold + holdExtension
+
+    return compDelay, compHold, dataPingMs, compOffset, rawNetPing, repOverhead
+end
+
+local testParryRunning = false
+function BX.triggerTestParry()
+    if testParryRunning then return end
+    testParryRunning = true
+    local rawDelay = S.bl_autodef_delay or 0.80
+    local rawHold = S.bl_autodef_hold or 0.20
+    local delay, hold, dataPingMs, compOffset, rawNet, repOvh = BX.calculateCompensatedTiming(rawDelay, rawHold)
+
+    print(string.format("[TEST PARRY] Hotkey triggered! Data Ping: %dms (Net: %dms + %dms rep, Comp: -%.3fs) | Delay: %.2fs -> %.2fs | Hold: %.2fs", math.floor(dataPingMs), math.floor(rawNet), math.floor(repOvh), compOffset, rawDelay, delay, hold))
+    task.spawn(function()
+        if delay > 0 then
+            if notify then
+                if S.bl_autodef_ping_comp and compOffset > 0 then
+                    notify("TEST PARRY", string.format("Data Ping %dms (-%.0fms) | Delaying %.2fs...", math.floor(dataPingMs), compOffset * 1000, delay), math.max(1, delay))
+                else
+                    notify("TEST PARRY", string.format("Simulating attack! Delaying %.2fs...", delay), math.max(1, delay))
+                end
+            end
+            task.wait(delay)
+        end
+        if type(setrobloxinput) == "function" then pcall(setrobloxinput, true) end
+        if keypress then pcall(keypress, 0x46) end
+        task.wait(0.08)
+        local lp = Players.LocalPlayer
+        local rs = game:GetService("ReplicatedStorage")
+        local bVal = lp and rs:FindFirstChild("Settings") and rs.Settings:FindFirstChild(lp.Name) and rs.Settings[lp.Name]:FindFirstChild("Blocking")
+        local isBlocking = bVal and bVal.Value or false
+        if notify then
+            notify("TEST PARRY", string.format("F Pressed! Blocking Active: %s (Hold %.2fs)", tostring(isBlocking):upper(), hold), 3)
+        end
+        print(string.format("[TEST PARRY] Blocking status is: %s", tostring(isBlocking)))
+        task.wait(math.max(0.05, hold - 0.08))
+        if keyrelease then keyrelease(0x46) end
+        print("[TEST PARRY] F released!")
+        testParryRunning = false
+    end)
+end
+_G.Bloodline_TestParry = function(hold)
+    BX.triggerTestParry()
+    return "Test parry executed."
+end
